@@ -93,11 +93,12 @@ export default function App() {
           position="bottom-right"
           toastOptions={{
             style: {
-              background: '#0f1117',
-              color: '#e8e8e8',
-              border: '1px solid #2a2a3a',
-              borderRadius: '12px',
+              background: '#ffffff',
+              color: '#1f2937',
+              border: '1px solid #e5e7eb',
+              borderRadius: '14px',
               fontSize: '14px',
+              boxShadow: '0 14px 40px rgba(17,24,39,0.08)',
             },
           }}
         />
