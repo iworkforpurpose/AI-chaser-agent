@@ -1,0 +1,13 @@
+node_modules/
+.env
+.env.*
+*.log
+.DS_Store
+
+# Build output
+build/
+frontend/build/
+
+# Editor and coverage noise
+.vscode/
+coverage/
