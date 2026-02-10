@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { Toaster } from 'react-hot-toast';
@@ -13,7 +13,7 @@ const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30000, retry: 1 } },
 });
 
-function Sidebar() {
+function Sidebar({ theme, onToggleTheme }) {
   const location = useLocation();
   const { data: notifs } = useQuery({
     queryKey: ['notifications'],
@@ -63,25 +63,42 @@ function Sidebar() {
             <div className="user-role">Manager</div>
           </div>
         </div>
+        <button
+          className="btn btn-ghost btn-sm"
+          style={{ marginTop: 12, width: '100%', justifyContent: 'center' }}
+          onClick={onToggleTheme}
+        >
+          {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+        </button>
       </div>
     </aside>
   );
 }
 
-function Layout({ children }) {
+function Layout({ children, theme, onToggleTheme }) {
   return (
     <div className="app-layout">
-      <Sidebar />
+      <Sidebar theme={theme} onToggleTheme={onToggleTheme} />
       <main className="main-content">{children}</main>
     </div>
   );
 }
 
 export default function App() {
+  const [theme, setTheme] = useState('light');
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.remove('theme-light', 'theme-dark');
+    root.classList.add(theme === 'dark' ? 'theme-dark' : 'theme-light');
+  }, [theme]);
+
+  const toggleTheme = () => setTheme(prev => (prev === 'dark' ? 'light' : 'dark'));
+
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <Layout>
+        <Layout theme={theme} onToggleTheme={toggleTheme}>
           <Routes>
             <Route path="/"       element={<Dashboard />} />
             <Route path="/tasks"  element={<TaskBoard />} />
@@ -93,12 +110,12 @@ export default function App() {
           position="bottom-right"
           toastOptions={{
             style: {
-              background: '#ffffff',
-              color: '#1f2937',
-              border: '1px solid #e5e7eb',
+              background: 'var(--bg-card)',
+              color: 'var(--text-primary)',
+              border: '1px solid var(--border)',
               borderRadius: '14px',
               fontSize: '14px',
-              boxShadow: '0 14px 40px rgba(17,24,39,0.08)',
+              boxShadow: 'none',
             },
           }}
         />

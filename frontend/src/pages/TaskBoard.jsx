@@ -207,8 +207,8 @@ function TaskCard({ task, onClick, isSelected, onToggleBulk }) {
       style={{
         padding: '16px', cursor: 'pointer', position: 'relative',
         borderColor: accentBorder,
-        boxShadow: '0 10px 28px rgba(17,24,39,0.05)',
-        background: '#fff',
+        boxShadow: 'none',
+        background: 'var(--bg-card)',
       }}
     >
       {isOverdue && (

@@ -1,4 +1,5 @@
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { taskApi, logApi, chaserApi } from '../api';
 import toast from 'react-hot-toast';
@@ -13,8 +14,6 @@ const TRIGGER_LABELS = {
   acknowledgment:'✅ Acknowledged',
   escalation:    '🚨 Escalated',
 };
-
-const CHANNEL_ICONS = { email: '📧', slack: '💬', in_app: '🔔', all: '📡' };
 
 function StatCard({ value, label, accent, delta, deltaColor }) {
   return (
@@ -39,6 +38,7 @@ function StatCard({ value, label, accent, delta, deltaColor }) {
 
 export default function Dashboard() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
 
   const { data: statsData, isLoading: statsLoading } = useQuery({
     queryKey: ['stats'],
@@ -69,28 +69,53 @@ export default function Dashboard() {
   const stats = statsData?.data || {};
   const logs  = logsData?.data  || [];
   const overdueTasks = overdueData?.data || [];
+  const upcomingChases = stats.upcomingChases || Math.max(1, (overdueTasks?.length || 0));
+  const nextActionEta = stats.nextActionEta || '3h';
+  const engineStatus = stats.engineStatus || 'Active';
+  const nextScan = stats.nextScan || 'in 15m';
 
   return (
     <div>
       <div className="page-header">
-        <div>
-          <div className="page-title">Mission Control</div>
-          <div className="page-subtitle">
-            {dayjs().format('dddd, MMMM D YYYY')} · Auto-chaser{' '}
-            <span style={{ color: 'var(--accent-green)' }}>● active</span>
+        <div className="page-hero">
+          <div>
+            <div className="eyebrow">AI operations · Mission control</div>
+            <div className="page-title">Chaser Command</div>
+            <div className="page-subtitle">
+              {dayjs().format('dddd, MMMM D YYYY')} · AI agent monitoring handoffs and nudges in real time
+            </div>
+            <div className="hero-meta">
+              <span className="pill pill-live"><span className="live-dot" />AI status · active</span>
+              <span className="pill pill-muted">{stats.totalTasks || 0} tasks under watch</span>
+            </div>
+          </div>
+          <div className="hero-actions">
+            <div className="hero-action-group">
+              <button className="action-chip" type="button">
+                <span className="ai-dot pulse" />
+                <span className="action-chip-text">
+                  <span className="action-chip-title">Chaser engine</span>
+                  <span className="action-chip-sub">Autonomously triaging and escalating</span>
+                </span>
+              </button>
+              <div className="hero-buttons">
+                <button
+                  className="btn btn-primary action-btn"
+                  onClick={() => runChaser.mutate()}
+                  disabled={runChaser.isPending}
+                >
+                  {runChaser.isPending ? 'Scanning...' : 'Run chaser now'}
+                </button>
+                <button className="btn btn-ghost action-btn" onClick={() => navigate('/tasks')}>
+                  View task board
+                </button>
+              </div>
+            </div>
           </div>
         </div>
-        <button
-          className="btn btn-primary"
-          onClick={() => runChaser.mutate()}
-          disabled={runChaser.isPending}
-        >
-          {runChaser.isPending ? '⟳ Scanning...' : '⚡ Run Chaser Now'}
-        </button>
       </div>
 
       <div className="page-body">
-        {/* KPI Stats */}
         {statsLoading ? (
           <div className="loading">Loading stats...</div>
         ) : (
@@ -99,7 +124,7 @@ export default function Dashboard() {
               value={stats.overdueTasks || 0}
               label="Overdue Tasks"
               accent="var(--accent-red)"
-              delta={stats.overdueTasks > 0 ? '⚠ Needs attention' : '✓ All on track'}
+              delta={stats.overdueTasks > 0 ? 'Needs attention' : 'All on track'}
               deltaColor={stats.overdueTasks > 0 ? 'var(--accent-red)' : 'var(--accent-green)'}
             />
             <StatCard
@@ -127,30 +152,49 @@ export default function Dashboard() {
               accent="var(--accent-cyan)"
               delta="Responses received"
             />
-            <StatCard
-              value={stats.totalTasks || 0}
-              label="Active Tasks"
-              accent="var(--accent-purple)"
-              delta="With chaser enabled"
-            />
           </div>
         )}
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
-          {/* Overdue Tasks Quick View */}
-          <div className="card">
-            <div className="section-title">🔴 Overdue Tasks</div>
+        <div className="ops-grid">
+          <div className="ops-card ops-active">
+            <div className="ops-row">
+              <div className="ops-label">Active Tasks</div>
+              <div className="ops-pill">AI watch</div>
+            </div>
+            <div className="ops-value">{stats.totalTasks || 0}</div>
+            <div className="ops-sub">Currently under AI watch</div>
+          </div>
+
+          <div className="ops-card ops-engine">
+            <div className="ops-row">
+              <div className="ops-label">Chaser Engine</div>
+              <div className={`status-dot ${engineStatus === 'Active' ? 'on' : 'paused'}`} />
+            </div>
+            <div className="ops-value sm">{engineStatus}</div>
+            <div className="ops-sub">Next scan {nextScan}</div>
+          </div>
+
+          <div className="ops-card ops-next">
+            <div className="ops-label">Next Action</div>
+            <div className="ops-value sm">{upcomingChases} tasks</div>
+            <div className="ops-sub">will be chased in {nextActionEta}</div>
+          </div>
+        </div>
+
+        <div className="panel-grid">
+          <div className="card panel-inset">
+            <div className="section-title">Overdue Tasks</div>
             {overdueTasks.length === 0 ? (
-              <div style={{ color: 'var(--accent-green)', fontSize: '13px', padding: '20px 0' }}>
-                ✓ No overdue tasks right now!
+              <div className="empty-state" style={{ color: 'var(--accent-green)' }}>
+                No overdue tasks right now.
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div className="overdue-list">
                 {overdueTasks.slice(0, 6).map(task => (
                   <OverdueItem key={task.id} task={task} qc={qc} />
                 ))}
                 {overdueTasks.length > 6 && (
-                  <div style={{ textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px', paddingTop: '8px' }}>
+                  <div className="empty-state" style={{ textAlign: 'center' }}>
                     +{overdueTasks.length - 6} more overdue tasks
                   </div>
                 )}
@@ -158,17 +202,16 @@ export default function Dashboard() {
             )}
           </div>
 
-          {/* Activity Feed */}
-          <div className="card">
-            <div className="section-title">⚡ Activity Feed</div>
+          <div className="card panel-inset">
+            <div className="section-title">Activity Feed</div>
             {logsLoading ? (
               <div className="loading">Loading...</div>
             ) : logs.length === 0 ? (
-              <div style={{ color: 'var(--text-muted)', fontSize: '13px', padding: '20px 0' }}>
+              <div className="empty-state">
                 No activity yet. Run the chaser to get started.
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
+              <div className="log-list">
                 {logs.map((log, i) => (
                   <LogItem key={log.id} log={log} isLast={i === logs.length - 1} />
                 ))}
@@ -192,23 +235,15 @@ function OverdueItem({ task, qc }) {
   const priorityColors = { critical: '#f97316', high: '#fbbf24', medium: '#fcd34d', low: 'var(--text-muted)' };
 
   return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: '10px',
-      padding: '12px 12px', borderRadius: '10px',
-      background: 'rgba(251,191,36,0.10)', border: '1px solid rgba(251,191,36,0.22)',
-    }}>
-      <div style={{ width: 3, height: 36, borderRadius: 99, background: priorityColors[task.priority] || 'var(--border)', flexShrink: 0 }} />
+    <div className="overdue-item">
+      <div className="overdue-bar" style={{ background: priorityColors[task.priority] || 'var(--accent-orange)' }} />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: '14px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-          {task.title}
-        </div>
-        <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'IBM Plex Mono, monospace' }}>
-          {task.assignee_name} · {daysOverdue} days past due
-        </div>
+        <div className="overdue-title">{task.title}</div>
+        <div className="overdue-meta">{task.assignee_name} · {daysOverdue} days past due</div>
       </div>
       <button
         className="btn btn-ghost btn-sm"
-        style={{ color: 'var(--accent-blue)', borderColor: 'var(--border)' }}
+        style={{ color: 'var(--accent-blue)', borderColor: 'var(--outline)' }}
         onClick={() => chase.mutate()}
         disabled={chase.isPending}
       >
@@ -219,30 +254,31 @@ function OverdueItem({ task, qc }) {
 }
 
 function LogItem({ log, isLast }) {
-  const statusColors = { sent: 'var(--accent-blue)', delivered: 'var(--accent-cyan)', acknowledged: 'var(--accent-green)', failed: 'var(--accent-red)' };
+  const statusColors = {
+    sent: '#2563eb',
+    delivered: '#0ea5e9',
+    acknowledged: '#15803d',
+    failed: '#b91c1c',
+  };
+
+  const statusTone = statusColors[log.status] || '#94a3b8';
 
   return (
-    <div style={{
-      display: 'flex', gap: '12px', paddingBottom: isLast ? 0 : '12px',
-      marginBottom: isLast ? 0 : '12px',
-      borderBottom: isLast ? 'none' : '1px solid var(--border)',
-    }}>
-      <div style={{ flexShrink: 0, marginTop: 2, fontSize: '16px' }}>
-        {CHANNEL_ICONS[log.channel] || '📡'}
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>
-          {TRIGGER_LABELS[log.trigger_type] || log.trigger_type}
+    <div className="log-row">
+      <div className="log-track" style={{ bottom: isLast ? '16px' : '0' }} />
+      <div
+        className="log-dot"
+        style={{ background: statusTone, boxShadow: `0 0 0 6px ${statusTone}22` }}
+      />
+      <div className="log-body" style={{ paddingBottom: isLast ? 0 : 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
+          <div className="log-title">{TRIGGER_LABELS[log.trigger_type] || log.trigger_type}</div>
+          <div className="log-meta">{dayjs(log.sent_at).fromNow()}</div>
         </div>
-        <div style={{ fontSize: '12px', color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {log.task_title}
+        <div className="log-sub">{log.task_title}</div>
+        <div className="log-meta" style={{ color: statusTone }}>
+          {log.status} · {log.recipient_email}
         </div>
-        <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'IBM Plex Mono, monospace', marginTop: 2 }}>
-          {dayjs(log.sent_at).fromNow()} · {log.recipient_email}
-        </div>
-      </div>
-      <div style={{ flexShrink: 0, fontSize: '11px', fontWeight: 600, color: statusColors[log.status] || 'var(--text-muted)', fontFamily: 'IBM Plex Mono, monospace', paddingTop: 2 }}>
-        {log.status}
       </div>
     </div>
   );
