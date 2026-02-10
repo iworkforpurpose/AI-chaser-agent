@@ -189,25 +189,30 @@ function OverdueItem({ task, qc }) {
   });
 
   const daysOverdue = dayjs().diff(dayjs(task.due_date), 'day');
-  const priorityColors = { critical: 'var(--accent-red)', high: 'var(--accent-orange)', medium: 'var(--accent-yellow)', low: 'var(--text-muted)' };
+  const priorityColors = { critical: '#f97316', high: '#fbbf24', medium: '#fcd34d', low: 'var(--text-muted)' };
 
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: '10px',
-      padding: '10px 12px', borderRadius: '8px',
-      background: 'rgba(255,61,90,0.06)', border: '1px solid rgba(255,61,90,0.15)',
+      padding: '12px 12px', borderRadius: '10px',
+      background: 'rgba(251,191,36,0.10)', border: '1px solid rgba(251,191,36,0.22)',
     }}>
       <div style={{ width: 3, height: 36, borderRadius: 99, background: priorityColors[task.priority] || 'var(--border)', flexShrink: 0 }} />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: '13px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        <div style={{ fontSize: '14px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
           {task.title}
         </div>
-        <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'IBM Plex Mono, monospace' }}>
-          {task.assignee_name} · {daysOverdue}d overdue
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'IBM Plex Mono, monospace' }}>
+          {task.assignee_name} · {daysOverdue} days past due
         </div>
       </div>
-      <button className="btn btn-chase btn-sm" onClick={() => chase.mutate()} disabled={chase.isPending}>
-        {chase.isPending ? '...' : '⚡ Chase'}
+      <button
+        className="btn btn-ghost btn-sm"
+        style={{ color: 'var(--accent-blue)', borderColor: 'var(--border)' }}
+        onClick={() => chase.mutate()}
+        disabled={chase.isPending}
+      >
+        {chase.isPending ? 'Sending…' : 'Send chase'}
       </button>
     </div>
   );

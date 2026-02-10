@@ -194,22 +194,27 @@ function TaskCard({ task, onClick, isSelected, onToggleBulk }) {
   });
 
   const avatarLetters = (task.assignee_name || 'U').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
+  const accentBorder = isOverdue
+    ? 'rgba(251,191,36,0.6)'
+    : isSelected
+      ? 'rgba(59,130,246,0.6)'
+      : 'var(--border)';
 
   return (
     <div
       onClick={onClick}
       className="card card-hover"
       style={{
-        padding: '14px', cursor: 'pointer', position: 'relative',
-        borderColor: isSelected ? 'var(--accent-blue)' : isOverdue ? 'rgba(255,61,90,0.4)' : undefined,
-        boxShadow: isOverdue ? '0 0 0 1px rgba(255,61,90,0.15)' : undefined,
+        padding: '16px', cursor: 'pointer', position: 'relative',
+        borderColor: accentBorder,
+        boxShadow: '0 10px 28px rgba(17,24,39,0.05)',
+        background: '#fff',
       }}
     >
-      {/* Overdue glow strip */}
       {isOverdue && (
         <div style={{
           position: 'absolute', top: 0, left: 0, right: 0, height: 2,
-          background: 'linear-gradient(90deg, var(--accent-red), transparent)', borderRadius: '10px 10px 0 0'
+          background: 'linear-gradient(90deg, rgba(251,191,36,0.9), transparent)', borderRadius: '10px 10px 0 0'
         }} />
       )}
 
@@ -223,7 +228,7 @@ function TaskCard({ task, onClick, isSelected, onToggleBulk }) {
         <span className={`badge badge-${task.priority}`}>{task.priority}</span>
       </div>
 
-      <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '8px', lineHeight: 1.4 }}>
+      <div style={{ fontSize: '15px', fontWeight: 700, marginBottom: '8px', lineHeight: 1.4, color: 'var(--text-primary)' }}>
         {task.title}
       </div>
 
@@ -234,33 +239,39 @@ function TaskCard({ task, onClick, isSelected, onToggleBulk }) {
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           fontSize: '9px', fontWeight: 700, color: '#fff', flexShrink: 0
         }}>{avatarLetters}</div>
-        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{task.assignee_name}</span>
+        <span style={{ fontSize: '13px', color: 'var(--text-muted)' }}>{task.assignee_name}</span>
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{
-          fontSize: '11px', fontFamily: 'IBM Plex Mono, monospace',
-          color: isOverdue ? 'var(--accent-red)' : 'var(--text-muted)'
+          fontSize: '12px', fontFamily: 'IBM Plex Mono, monospace',
+          color: isOverdue ? '#b45309' : 'var(--text-muted)'
         }}>
-          {isOverdue ? '⚠ ' : '📅 '}
+          {isOverdue ? 'Past due · ' : 'Due · '}
           {dayjs(task.due_date).format('MMM D')}
         </span>
         {task.chaser_count > 0 && (
-          <span style={{ fontSize: '10px', color: 'var(--accent-orange)', fontFamily: 'IBM Plex Mono, monospace' }}>
-            ⚡×{task.chaser_count}
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'IBM Plex Mono, monospace' }}>
+            {task.chaser_count} chases
           </span>
         )}
       </div>
 
       {task.status !== 'done' && (
-        <div style={{ display: 'flex', gap: '6px', marginTop: '10px', borderTop: '1px solid var(--border)', paddingTop: '10px' }}>
+        <div style={{ display: 'flex', gap: '8px', marginTop: '12px', borderTop: '1px solid var(--border)', paddingTop: '10px' }}>
           <button
-            className="btn btn-chase btn-sm"
-            style={{ flex: 1, justifyContent: 'center' }}
+            className="btn btn-ghost btn-sm"
+            style={{
+              flex: 1,
+              justifyContent: 'center',
+              color: 'var(--accent-blue)',
+              borderColor: 'var(--border)',
+              background: 'rgba(59,130,246,0.07)'
+            }}
             onClick={(e) => { e.stopPropagation(); chase.mutate(e); }}
             disabled={chase.isPending}
           >
-            {chase.isPending ? '...' : '⚡ Chase'}
+            {chase.isPending ? 'Sending…' : 'Send chase'}
           </button>
           <button
             className="btn btn-ghost btn-sm"
@@ -268,7 +279,7 @@ function TaskCard({ task, onClick, isSelected, onToggleBulk }) {
             disabled={snooze.isPending}
             title="Snooze chasing for 4 hours"
           >
-            💤
+            Snooze 4h
           </button>
         </div>
       )}
