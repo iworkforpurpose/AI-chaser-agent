@@ -1,0 +1,163 @@
+{
+  "workflows": [
+    {
+      "name": "hourly-chaser-cron",
+      "description": "Runs every hour to scan for tasks that need chasing",
+      "trigger": {
+        "type": "schedule",
+        "config": {
+          "cron": "0 * * * *",
+          "timezone": "Asia/Kolkata"
+        }
+      },
+      "steps": [
+        {
+          "id": "trigger_scan",
+          "name": "Trigger Backend Chaser Scan",
+          "type": "http_request",
+          "config": {
+            "method": "POST",
+            "url": "{{env.APP_BASE_URL}}/api/webhooks/boltic/cron-trigger",
+            "headers": { "Content-Type": "application/json" },
+            "body": { "source": "boltic_cron", "timestamp": "{{now}}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "manual-chaser-webhook",
+      "description": "Sends personalized notifications when a task is chased (email + slack)",
+      "trigger": {
+        "type": "webhook",
+        "config": { "method": "POST" }
+      },
+      "steps": [
+        {
+          "id": "send_email",
+          "name": "Send Chase Email",
+          "type": "gmail_send",
+          "condition": "{{trigger.channel == 'email' || trigger.channel == 'all'}}",
+          "config": {
+            "to": "{{trigger.assignee_email}}",
+            "subject": "[Action Required] {{trigger.task_title}}",
+            "body": "{{trigger.message}}\n\n---\n🔗 View Task: {{trigger.task_link}}\n💤 Snooze (4h): {{trigger.snooze_link}}\n✅ Mark Done: {{trigger.task_link}}"
+          }
+        },
+        {
+          "id": "send_slack",
+          "name": "Send Slack Message",
+          "type": "slack_message",
+          "condition": "{{trigger.channel == 'slack' || trigger.channel == 'all'}}",
+          "config": {
+            "channel": "#general",
+            "text": "{{trigger.message}}",
+            "blocks": [
+              { "type": "section", "text": { "type": "mrkdwn", "text": "{{trigger.message}}" } },
+              { "type": "actions", "elements": [
+                { "type": "button", "text": { "type": "plain_text", "text": "View Task" }, "url": "{{trigger.task_link}}" },
+                { "type": "button", "text": { "type": "plain_text", "text": "Snooze 4h" }, "url": "{{trigger.snooze_link}}" }
+              ]}
+            ]
+          }
+        },
+        {
+          "id": "handle_escalation",
+          "name": "Send Escalation Email to Manager",
+          "type": "gmail_send",
+          "condition": "{{trigger.is_escalation == true && trigger.escalation_email != ''}}",
+          "config": {
+            "to": "{{trigger.escalation_email}}",
+            "subject": "🚨 ESCALATION: {{trigger.task_title}}",
+            "body": "Task \"{{trigger.task_title}}\" assigned to {{trigger.assignee_name}} has been escalated.\n\n{{trigger.message}}\n\nPlease review immediately: {{trigger.task_link}}"
+          }
+        },
+        {
+          "id": "confirm_delivery",
+          "name": "Confirm Delivery to Backend",
+          "type": "http_request",
+          "config": {
+            "method": "POST",
+            "url": "{{env.APP_BASE_URL}}/api/webhooks/boltic/delivery-confirm",
+            "headers": { "Content-Type": "application/json" },
+            "body": { "task_id": "{{trigger.task_id}}", "status": "delivered", "channel": "{{trigger.channel}}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "task-acknowledgment",
+      "description": "Celebrates task completion and notifies stakeholders",
+      "trigger": {
+        "type": "webhook",
+        "config": { "method": "POST" }
+      },
+      "steps": [
+        {
+          "id": "congrats_assignee",
+          "name": "Congratulate Assignee",
+          "type": "gmail_send",
+          "config": {
+            "to": "{{trigger.assignee_email}}",
+            "subject": "✅ Task Completed: {{trigger.task_title}}",
+            "body": "Great work, {{trigger.assignee_name}}! 🎉\n\nYou've completed \"{{trigger.task_title}}\". This has been logged and your manager has been notified.\n\nKeep it up! 💪"
+          }
+        },
+        {
+          "id": "notify_reporter",
+          "name": "Notify Reporter",
+          "type": "gmail_send",
+          "condition": "{{trigger.reporter_email != trigger.assignee_email}}",
+          "config": {
+            "to": "{{trigger.reporter_email}}",
+            "subject": "✅ [Done] {{trigger.task_title}}",
+            "body": "{{trigger.assignee_name}} has completed \"{{trigger.task_title}}\".\n\nCompleted at: {{trigger.completed_at}}"
+          }
+        }
+      ]
+    },
+    {
+      "name": "weekly-monday-digest",
+      "description": "Sends personalized weekly task summaries every Monday at 9 AM",
+      "trigger": {
+        "type": "schedule",
+        "config": {
+          "cron": "0 9 * * 1",
+          "timezone": "Asia/Kolkata"
+        }
+      },
+      "steps": [
+        {
+          "id": "fetch_digest",
+          "name": "Fetch Weekly Digest Data",
+          "type": "http_request",
+          "config": {
+            "method": "GET",
+            "url": "{{env.APP_BASE_URL}}/api/tasks/weekly-digest"
+          }
+        },
+        {
+          "id": "send_digests",
+          "name": "Send Digest Per User",
+          "type": "loop",
+          "config": {
+            "items": "{{steps.fetch_digest.response.data}}",
+            "steps": [
+              {
+                "type": "gmail_send",
+                "config": {
+                  "to": "{{item.email}}",
+                  "subject": "📋 Your Task Summary — Week of {{today}}",
+                  "body": "Good Monday, {{item.name}}! 👋\n\nHere are your {{item.tasks.length}} pending tasks for this week:\n\n{{item.tasks | format_task_list}}\n\nStay on track! ⚡"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "env_variables": [
+    { "key": "APP_BASE_URL", "description": "Your Express backend URL (use ngrok for dev)", "example": "https://abc123.ngrok.io" },
+    { "key": "FRONTEND_URL", "description": "Your React frontend URL", "example": "http://localhost:3000" }
+  ]
+}
