@@ -188,28 +188,21 @@ html, body, #root {
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 20px 18px;
+  padding: 18px;
   position: relative;
   overflow: hidden;
-  transition: all 0.2s ease;
-  box-shadow: var(--shadow);
+  transition: all 0.16s ease;
+  box-shadow: 0 12px 30px rgba(17, 24, 39, 0.04);
 }
 
-.stat-card:hover { border-color: var(--border-light); transform: translateY(-2px); }
+.stat-card:hover { border-color: var(--border-light); transform: translateY(-1px); box-shadow: 0 14px 36px rgba(17,24,39,0.06); }
 
-.stat-card::before {
-  content: '';
-  position: absolute; top: 0; left: 0; right: 0; height: 4px;
-  background: linear-gradient(90deg, var(--card-accent, var(--accent-blue)), transparent 90%);
-}
-
-.stat-value { font-size: 34px; font-weight: 700; color: var(--text-primary); line-height: 1; letter-spacing: -0.4px; }
-.stat-label { font-size: 13px; color: var(--text-secondary); margin-top: 10px; letter-spacing: 0.2px; }
+.stat-value { font-size: 32px; font-weight: 700; color: var(--text-primary); line-height: 1.1; letter-spacing: -0.3px; }
+.stat-label { font-size: 13px; color: var(--text-muted); letter-spacing: 0.15px; text-transform: uppercase; }
 .stat-delta {
   font-size: 12px; font-family: 'IBM Plex Mono', monospace;
-  margin-top: 10px; display: flex; align-items: center; gap: 6px;
+  display: inline-flex; align-items: center; gap: 6px;
 }
-.stat-icon { font-size: 22px; position: absolute; top: 16px; right: 16px; opacity: 0.25; }
 
 /* ── BUTTONS ────────────────────────────────────────────────────── */
 .btn {

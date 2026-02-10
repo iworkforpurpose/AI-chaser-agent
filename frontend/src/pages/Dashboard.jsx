@@ -16,17 +16,23 @@ const TRIGGER_LABELS = {
 
 const CHANNEL_ICONS = { email: '📧', slack: '💬', in_app: '🔔', all: '📡' };
 
-function StatCard({ value, label, icon, accent, delta, deltaColor }) {
+function StatCard({ value, label, accent, delta, deltaColor }) {
   return (
-    <div className="stat-card" style={{ '--card-accent': accent }}>
-      <span className="stat-icon">{icon}</span>
-      <div className="stat-value">{value}</div>
-      <div className="stat-label">{label}</div>
-      {delta !== undefined && (
-        <div className="stat-delta" style={{ color: deltaColor || 'var(--text-muted)' }}>
-          {delta}
+    <div className="stat-card">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {accent && (
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: accent, display: 'inline-block' }} />
+          )}
+          <span className="stat-label">{label}</span>
         </div>
-      )}
+        {delta !== undefined && (
+          <span className="stat-delta" style={{ color: deltaColor || 'var(--text-muted)' }}>
+            {delta}
+          </span>
+        )}
+      </div>
+      <div className="stat-value">{value}</div>
     </div>
   );
 }
@@ -92,7 +98,6 @@ export default function Dashboard() {
             <StatCard
               value={stats.overdueTasks || 0}
               label="Overdue Tasks"
-              icon="🔴"
               accent="var(--accent-red)"
               delta={stats.overdueTasks > 0 ? '⚠ Needs attention' : '✓ All on track'}
               deltaColor={stats.overdueTasks > 0 ? 'var(--accent-red)' : 'var(--accent-green)'}
@@ -100,14 +105,12 @@ export default function Dashboard() {
             <StatCard
               value={stats.dueTodayCount || 0}
               label="Due Today"
-              icon="📅"
               accent="var(--accent-orange)"
               delta="Review and act"
             />
             <StatCard
               value={`${stats.completionRate || 0}%`}
               label="Completion Rate"
-              icon="📈"
               accent="var(--accent-green)"
               delta={`${stats.doneTasks || 0} tasks done`}
               deltaColor="var(--accent-green)"
@@ -115,21 +118,18 @@ export default function Dashboard() {
             <StatCard
               value={stats.chasersSentToday || 0}
               label="Chasers Today"
-              icon="⚡"
               accent="var(--accent-blue)"
               delta={`${stats.totalChasersSent || 0} total sent`}
             />
             <StatCard
               value={`${stats.acknowledgmentRate || 0}%`}
               label="Ack Rate"
-              icon="✅"
               accent="var(--accent-cyan)"
               delta="Responses received"
             />
             <StatCard
               value={stats.totalTasks || 0}
               label="Active Tasks"
-              icon="⊞"
               accent="var(--accent-purple)"
               delta="With chaser enabled"
             />
