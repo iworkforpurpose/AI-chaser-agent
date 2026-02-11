@@ -1,17 +1,28 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { taskApi, logApi, chaserApi } from '../api';
+import { taskApi, chaserApi, userApi } from '../api';
 import toast from 'react-hot-toast';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 dayjs.extend(relativeTime);
 
-const TRIGGER_LABELS = {
-  deadline_proximity: '⏰ Deadline Alert',
-  overdue_escalation: '🔴 Overdue Chase',
-  manual: '👆 Manual Chase',
-  auto_ack: '✅ Acknowledged',
+const scalar = (value) => (Array.isArray(value) ? value[0] : value);
+const PRESET_WINDOWS = {
+  today: 'Today',
+  seven_days: 'Last 7 Days',
+  thirty_days: 'Last 30 Days',
+};
+
+const getPresetRange = (preset) => {
+  const now = dayjs();
+  if (preset === 'today') {
+    return { from: now.startOf('day'), to: now.endOf('day') };
+  }
+  if (preset === 'seven_days') {
+    return { from: now.subtract(6, 'day').startOf('day'), to: now.endOf('day') };
+  }
+  return { from: now.subtract(29, 'day').startOf('day'), to: now.endOf('day') };
 };
 
 function getNextScanLabel(cronSchedule) {
@@ -58,17 +69,15 @@ function StatCard({ value, label, accent, delta, deltaColor }) {
 export default function Dashboard() {
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const [presetWindow, setPresetWindow] = useState('thirty_days');
+  const [memberFilter, setMemberFilter] = useState('');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
 
   const { data: statsData, isLoading: statsLoading } = useQuery({
     queryKey: ['stats'],
     queryFn: () => taskApi.stats(),
     refetchInterval: 60000,
-  });
-
-  const { data: logsData, isLoading: logsLoading } = useQuery({
-    queryKey: ['chaser-logs'],
-    queryFn: () => logApi.list({ limit: 20 }),
-    refetchInterval: 30000,
   });
 
   const { data: overdueData } = useQuery({
@@ -88,6 +97,33 @@ export default function Dashboard() {
     refetchInterval: 60000,
   });
 
+  const { data: usersData } = useQuery({
+    queryKey: ['users'],
+    queryFn: () => userApi.list(),
+  });
+
+  const completedParams = useMemo(() => {
+    const params = { limit: 50 };
+    if (memberFilter) params.assignee_email = memberFilter;
+
+    if (customFrom) params.date_from = customFrom;
+    if (customTo) params.date_to = customTo;
+
+    if (!customFrom && !customTo) {
+      const range = getPresetRange(presetWindow);
+      params.date_from = range.from.format('YYYY-MM-DD');
+      params.date_to = range.to.format('YYYY-MM-DD');
+    }
+
+    return params;
+  }, [memberFilter, customFrom, customTo, presetWindow]);
+
+  const { data: completedData, isLoading: completedLoading } = useQuery({
+    queryKey: ['completed-tasks', completedParams],
+    queryFn: () => taskApi.completed(completedParams),
+    refetchInterval: 60000,
+  });
+
   const runChaser = useMutation({
     mutationFn: () => chaserApi.runNow(),
     onSuccess: (data) => {
@@ -98,10 +134,16 @@ export default function Dashboard() {
   });
 
   const stats = statsData?.data || {};
-  const logs  = logsData?.data  || [];
   const overdueTasks = overdueData?.data || [];
   const dueSoonTasks = dueSoonData?.data || [];
+  const completedTasks = completedData?.data || [];
   const upcomingChases = dueSoonData?.count ?? dueSoonTasks.length;
+  const users = (usersData?.data || []).map((user) => ({
+    id: String(scalar(user.id) || ''),
+    email: String(scalar(user.email) || '').trim().toLowerCase(),
+    name: scalar(user.name) || '',
+  })).filter((user) => user.email);
+  const memberOptions = Array.from(new Map(users.map((user) => [user.email, user])).values());
   const earliestDueTask = dueSoonTasks.reduce((earliest, task) => {
     if (!task?.due_date) return earliest;
     if (!earliest) return task;
@@ -111,6 +153,14 @@ export default function Dashboard() {
   const engineStatus = healthLoading ? 'Checking' : (healthData?.db?.ok ? 'Active' : 'Degraded');
   const nextScan = getNextScanLabel(healthData?.chaser?.cron_schedule);
   const engineStatusPill = engineStatus.toLowerCase();
+  const activePresetRange = getPresetRange(presetWindow);
+
+  const resetDoneFilters = () => {
+    setPresetWindow('thirty_days');
+    setMemberFilter('');
+    setCustomFrom('');
+    setCustomTo('');
+  };
 
   return (
     <div>
@@ -229,36 +279,98 @@ export default function Dashboard() {
                 No overdue tasks right now.
               </div>
             ) : (
-              <div className="overdue-list">
-                {overdueTasks.slice(0, 6).map(task => (
+              <div className={`overdue-list ${overdueTasks.length > 5 ? 'scroll-list' : ''}`}>
+                {overdueTasks.map(task => (
                   <OverdueItem key={task.id} task={task} qc={qc} />
                 ))}
-                {overdueTasks.length > 6 && (
-                  <div className="empty-state" style={{ textAlign: 'center' }}>
-                    +{overdueTasks.length - 6} more overdue tasks
-                  </div>
-                )}
               </div>
             )}
           </div>
 
           <div className="card panel-inset">
-            <div className="section-title">Activity Feed</div>
-            {logsLoading ? (
-              <div className="loading">Loading...</div>
-            ) : logs.length === 0 ? (
+            <div className="section-title">Completed Tasks</div>
+            <div className="done-filter-row">
+              <div className="done-chip-group">
+                {Object.entries(PRESET_WINDOWS).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    className={`done-chip ${presetWindow === key && !customFrom && !customTo ? 'active' : ''}`}
+                    onClick={() => {
+                      setPresetWindow(key);
+                      setCustomFrom('');
+                      setCustomTo('');
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="done-range-group" role="group" aria-label="Completion date range">
+                <div className="done-range-label">Completed between</div>
+                <div className="done-range-inputs">
+                  <label className="done-range-field">
+                    <span>From</span>
+                    <input
+                      type="date"
+                      value={customFrom}
+                      onChange={(e) => setCustomFrom(e.target.value)}
+                      className="done-date-input"
+                      aria-label="Completed from date"
+                    />
+                  </label>
+                  <span className="done-range-arrow" aria-hidden>→</span>
+                  <label className="done-range-field">
+                    <span>To</span>
+                    <input
+                      type="date"
+                      value={customTo}
+                      onChange={(e) => setCustomTo(e.target.value)}
+                      className="done-date-input"
+                      aria-label="Completed to date"
+                    />
+                  </label>
+                </div>
+              </div>
+              <select
+                value={memberFilter}
+                onChange={(e) => setMemberFilter(e.target.value)}
+                className="done-member-select"
+                aria-label="Filter by member"
+              >
+                <option value="">All Members</option>
+                {memberOptions.map((member) => (
+                  <option key={member.email} value={member.email}>
+                    {member.name || member.email}
+                  </option>
+                ))}
+              </select>
+              <button type="button" className="btn btn-ghost btn-sm done-clear-btn" onClick={resetDoneFilters}>
+                Clear
+              </button>
+            </div>
+            <div className="done-filter-meta">
+              {customFrom || customTo
+                ? 'Custom date range'
+                : `${PRESET_WINDOWS[presetWindow]} · ${activePresetRange.from.format('MMM D')} to ${activePresetRange.to.format('MMM D')}`}
+              <span>{completedTasks.length} done</span>
+            </div>
+            {completedLoading ? (
+              <div className="loading">Loading completed tasks...</div>
+            ) : completedTasks.length === 0 ? (
               <div className="empty-state">
-                No activity yet. Run the chaser to get started.
+                No completed tasks found for this filter.
               </div>
             ) : (
-              <div className="log-list">
-                {logs.map((log, i) => (
-                  <LogItem key={log.id} log={log} isLast={i === logs.length - 1} />
+              <div className={`done-list ${completedTasks.length > 5 ? 'scroll-list' : ''}`}>
+                {completedTasks.map((task) => (
+                  <DoneTaskItem key={task.id} task={task} />
                 ))}
               </div>
             )}
           </div>
         </div>
+        <div className="made-in-footer">made with ❤️ in Mumbai</div>
       </div>
     </div>
   );
@@ -293,32 +405,28 @@ function OverdueItem({ task, qc }) {
   );
 }
 
-function LogItem({ log, isLast }) {
-  const statusColors = {
-    sent: '#2563eb',
-    delivered: '#0ea5e9',
-    acknowledged: '#15803d',
-    failed: '#b91c1c',
-  };
-
-  const statusTone = statusColors[log.status] || '#94a3b8';
+function DoneTaskItem({ task }) {
+  const completedAt = scalar(task.completed_at);
+  const assigneeName = scalar(task.assignee_name) || 'Unknown Assignee';
+  const assigneeEmail = scalar(task.assignee_email) || 'unknown@unknown.com';
+  const priority = String(scalar(task.priority) || 'medium').toLowerCase();
+  const completedLabel = completedAt && dayjs(completedAt).isValid()
+    ? `${dayjs(completedAt).format('MMM D, YYYY h:mm A')} · ${dayjs(completedAt).fromNow()}`
+    : 'Completion time unavailable';
 
   return (
-    <div className="log-row">
-      <div className="log-track" style={{ bottom: isLast ? '16px' : '0' }} />
-      <div
-        className="log-dot"
-        style={{ background: statusTone, boxShadow: `0 0 0 6px ${statusTone}22` }}
-      />
-      <div className="log-body" style={{ paddingBottom: isLast ? 0 : 16 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
-          <div className="log-title">{TRIGGER_LABELS[log.type] || log.type}</div>
-          <div className="log-meta">{dayjs(log.sent_at).fromNow()}</div>
-        </div>
-        <div className="log-sub">{log.task_title}</div>
-        <div className="log-meta" style={{ color: statusTone }}>
-          {log.status} · {log.recipient_email}
-        </div>
+    <div className="done-item">
+      <div className="done-item-top">
+        <div className="done-item-title">{task.title}</div>
+        <span className={`done-priority done-priority-${priority}`}>{priority}</span>
+      </div>
+      <div className="done-item-meta">
+        <span>{assigneeName}</span>
+        <span>{assigneeEmail}</span>
+      </div>
+      <div className="done-item-completed">
+        <span>Completed</span>
+        <span>{completedLabel}</span>
       </div>
     </div>
   );

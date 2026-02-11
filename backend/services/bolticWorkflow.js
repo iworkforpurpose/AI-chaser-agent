@@ -26,7 +26,13 @@ class BolticWorkflowService {
   async triggerWorkflow(webhookUrl, payload) {
     if (!webhookUrl) {
       console.warn('[BolticWorkflow] No webhook URL configured — skipping workflow trigger');
-      return { skipped: true, reason: 'no_webhook_url' };
+      return {
+        success: false,
+        skipped: true,
+        reason: 'no_webhook_url',
+        error: 'Workflow webhook URL is not configured',
+        code: 'no_webhook_url',
+      };
     }
 
     try {
