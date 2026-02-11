@@ -10,11 +10,10 @@ dayjs.extend(isToday);
 dayjs.extend(isYesterday);
 
 const TRIGGER_CONFIG = {
-  auto_deadline:  { label: 'Deadline Alert',  color: 'var(--accent-blue)',   icon: '⏰' },
-  auto_overdue:   { label: 'Overdue Chase',   color: 'var(--accent-red)',    icon: '🔴' },
-  manual:         { label: 'Manual Chase',    color: 'var(--accent-orange)', icon: '👆' },
-  acknowledgment: { label: 'Acknowledged',    color: 'var(--accent-green)',  icon: '✅' },
-  escalation:     { label: 'Escalation',      color: 'var(--accent-red)',    icon: '🚨' },
+  deadline_proximity: { label: 'Deadline Alert', color: 'var(--accent-blue)', icon: '⏰' },
+  overdue_escalation: { label: 'Overdue Chase',  color: 'var(--accent-red)', icon: '🔴' },
+  manual:             { label: 'Manual Chase',   color: 'var(--accent-orange)', icon: '👆' },
+  auto_ack:           { label: 'Acknowledged',   color: 'var(--accent-green)', icon: '✅' },
 };
 
 const STATUS_CONFIG = {
@@ -24,7 +23,23 @@ const STATUS_CONFIG = {
   failed:       { label: 'Failed',       color: 'var(--accent-red)' },
 };
 
-const CHANNEL_ICONS = { email: '📧', slack: '💬', in_app: '🔔', all: '📡' };
+const CHANNEL_ICONS = { email: '📧', slack: '💬', webhook: '🪝' };
+const scalar = (value) => (Array.isArray(value) ? value[0] : value);
+
+const normalizeLog = (log = {}) => ({
+  ...log,
+  task_id: scalar(log.task_id),
+  rule_id: scalar(log.rule_id),
+  type: scalar(log.type),
+  status: scalar(log.status),
+  channel: scalar(log.channel),
+  task_title: scalar(log.task_title),
+  assignee_name: scalar(log.assignee_name),
+  recipient_email: scalar(log.recipient_email),
+  sent_at: scalar(log.sent_at),
+  acknowledged_at: scalar(log.acknowledged_at),
+  triggered_by: scalar(log.triggered_by),
+});
 
 export default function ChaserLog() {
   const [filterType, setFilterType] = useState('');
@@ -34,12 +49,14 @@ export default function ChaserLog() {
     queryKey: ['chaser-logs', filterType, filterStatus],
     queryFn: () => logApi.list({
       limit: 100,
-      ...(filterType ? { trigger_type: filterType } : {}),
+      ...(filterType ? { type: filterType } : {}),
+      ...(filterStatus ? { status: filterStatus } : {}),
     }),
     refetchInterval: 30000,
   });
 
-  let logs = data?.data || [];
+  let logs = (data?.data || []).map(normalizeLog);
+  if (filterType) logs = logs.filter(l => l.type === filterType);
   if (filterStatus) logs = logs.filter(l => l.status === filterStatus);
 
   // Group logs by date
@@ -54,7 +71,7 @@ export default function ChaserLog() {
   const total = logs.length;
   const acknowledged = logs.filter(l => l.status === 'acknowledged').length;
   const failed = logs.filter(l => l.status === 'failed').length;
-  const manual = logs.filter(l => l.trigger_type === 'manual').length;
+  const manual = logs.filter(l => l.type === 'manual').length;
 
   return (
     <div>
@@ -140,7 +157,7 @@ export default function ChaserLog() {
                   <span style={{ color: 'var(--border-light)' }}>({dateLogs.length})</span>
                 </div>
 
-                <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {dateLogs.map((log, i) => (
                     <LogRow key={log.id} log={log} isLast={i === dateLogs.length - 1} />
                   ))}
@@ -154,20 +171,62 @@ export default function ChaserLog() {
 }
 
 function LogRow({ log, isLast }) {
-  const [expanded, setExpanded] = useState(false);
-  const trigger = TRIGGER_CONFIG[log.trigger_type] || { label: log.trigger_type, color: 'var(--text-muted)', icon: '📡' };
+  const trigger = TRIGGER_CONFIG[log.type] || { label: log.type, color: 'var(--text-muted)', icon: '📡' };
   const status  = STATUS_CONFIG[log.status]        || { label: log.status,       color: 'var(--text-muted)' };
 
+  // Derive display name from assignee_name, triggered_by, or email prefix
+  const recipientName = log.assignee_name
+    || (log.recipient_email ? log.recipient_email.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'Unknown');
+
   return (
-    <div style={{
-      borderBottom: isLast ? 'none' : '1px solid var(--border)',
-      cursor: 'pointer', transition: 'background 0.1s',
-    }}
-      onClick={() => setExpanded(!expanded)}
-    >
+    <div className="card" style={{
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius)',
+      transition: 'all 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94)',
+      marginBottom: isLast ? 0 : '0px'
+    }}>
+      {/* ── Header: Recipient Name & Email ── */}
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '10px 16px 6px',
+        borderBottom: '1px solid var(--border)',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+          {/* Avatar circle */}
+          <div style={{
+            width: 30, height: 30, borderRadius: '8px', flexShrink: 0,
+            background: `linear-gradient(135deg, ${trigger.color}28, ${trigger.color}14)`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: '12px', fontWeight: 700, color: trigger.color,
+            border: `1px solid ${trigger.color}30`,
+          }}>
+            {recipientName.charAt(0).toUpperCase()}
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.3 }}>
+              {recipientName}
+            </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'IBM Plex Mono, monospace', lineHeight: 1.3 }}>
+              {log.recipient_email}
+            </div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexShrink: 0 }}>
+          {/* Status */}
+          <span style={{ fontSize: '11px', fontWeight: 600, color: status.color, fontFamily: 'IBM Plex Mono, monospace' }}>
+            {status.label}
+          </span>
+          {/* Time */}
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'IBM Plex Mono, monospace' }}>
+            {dayjs(log.sent_at).format('h:mm A')}
+          </span>
+        </div>
+      </div>
+
+      {/* ── Body: Task + Trigger ── */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: '14px',
-        padding: '14px 18px',
+        padding: '10px 16px',
       }}>
         {/* Trigger type dot */}
         <div style={{
@@ -193,32 +252,21 @@ function LogRow({ log, isLast }) {
               {trigger.icon} {trigger.label}
             </span>
           </div>
-          <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'IBM Plex Mono, monospace', marginTop: '3px' }}>
-            → {log.recipient_email}
-            {log.triggered_by && log.triggered_by !== 'system' && ` · by ${log.triggered_by}`}
-          </div>
+          {log.triggered_by && log.triggered_by !== 'system' && (
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontFamily: 'IBM Plex Mono, monospace', marginTop: '3px' }}>
+              Triggered by {log.triggered_by}
+            </div>
+          )}
         </div>
-
-        {/* Status */}
-        <span style={{ fontSize: '11px', fontWeight: 600, color: status.color, fontFamily: 'IBM Plex Mono, monospace', flexShrink: 0 }}>
-          {status.label}
-        </span>
-
-        {/* Time */}
-        <span style={{ fontSize: '11px', color: 'var(--text-muted)', flexShrink: 0, fontFamily: 'IBM Plex Mono, monospace' }}>
-          {dayjs(log.sent_at).format('h:mm A')}
-        </span>
-
-        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{expanded ? '▲' : '▼'}</span>
       </div>
 
       {/* Expanded message preview */}
-      {expanded && log.message_sent && (
+      {log.message_sent && (
         <div style={{
-          padding: '0 18px 14px 46px',
+          padding: '0 16px 10px 44px',
           fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6,
           background: 'rgba(255,255,255,0.02)',
-          borderTop: '1px solid var(--border)', paddingTop: '12px'
+          borderTop: '1px solid var(--border)', paddingTop: '8px'
         }}>
           <div style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '6px' }}>
             MESSAGE SENT:

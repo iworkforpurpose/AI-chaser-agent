@@ -198,26 +198,74 @@ class ChaserEngine {
       await db.update('tasks', task.id, { ack_token: ackToken });
     }
 
+    let deliveryStatus = 'sent';
+    let deliveryError = null;
+
     // 1. Trigger Boltic Workflow (skip if source is boltic to avoid loop)
     if (source === 'boltic') {
       console.log('[ChaserEngine] Skipping Boltic trigger to avoid loop');
     } else {
-      await bolticWorkflow.triggerManualChaser({
-        taskId: task.id,
-        taskTitle: task.title,
-        assigneeEmail: task.assignee_email,
-        assigneeName: task.assignee_name,
-        dueDate: task.due_date,
-        priority: priorityVal,
-        status: statusVal,
-        message,
-        channel: rule.escalation_channel || 'email',
-        chaserCount: (task.times_chased || 0) + 1,
-        isEscalation,
-        escalationEmail: null,
-        triggerType: typeLabel,
-        ackToken,
-      });
+      try {
+        const workflowResult = await bolticWorkflow.triggerManualChaser({
+          taskId: task.id,
+          taskTitle: task.title,
+          assigneeEmail: task.assignee_email,
+          assigneeName: task.assignee_name,
+          dueDate: task.due_date,
+          priority: priorityVal,
+          status: statusVal,
+          message,
+          channel: rule.escalation_channel || 'email',
+          chaserCount: (task.times_chased || 0) + 1,
+          isEscalation,
+          escalationEmail: null,
+          triggerType: typeLabel,
+          ackToken,
+        });
+
+        if (workflowResult?.success === false) {
+          deliveryStatus = 'failed';
+          deliveryError = workflowResult.error || 'workflow trigger failed';
+        }
+      } catch (err) {
+        deliveryStatus = 'failed';
+        deliveryError = err.message || 'workflow trigger failed';
+      }
+    }
+
+    if (deliveryStatus === 'failed') {
+      // Persist failed attempt for audit/debugging, but never mask the real delivery error.
+      try {
+        await db.insert('chaser_logs', {
+          task_id: task.id,
+          rule_id: rule.id,
+          type: typeLabel,
+          status: 'failed',
+          channel: rule.escalation_channel || 'email',
+          message_sent: message,
+          sent_at: new Date().toISOString(),
+          error: deliveryError,
+          attempt: 1,
+        });
+      } catch (insertErr) {
+        // Backward-compat fallback: some existing tables may not have the "error" field.
+        try {
+          await db.insert('chaser_logs', {
+            task_id: task.id,
+            rule_id: rule.id,
+            type: typeLabel,
+            status: 'failed',
+            channel: rule.escalation_channel || 'email',
+            message_sent: message,
+            sent_at: new Date().toISOString(),
+            attempt: 1,
+          });
+        } catch (fallbackErr) {
+          console.error('[ChaserEngine] Failed to insert failed-delivery log:', fallbackErr.message || insertErr.message);
+        }
+      }
+
+      throw new Error(`Chase delivery failed: ${deliveryError}`);
     }
 
     // 2. Log to Boltic DB
@@ -232,7 +280,7 @@ class ChaserEngine {
       attempt: 1,
     });
 
-    // 3. Update task chaser stats
+    // 3. Update task chaser stats only when delivery succeeds
     await db.update('tasks', task.id, {
       times_chased: (task.times_chased || 0) + 1,
       times_escalated: isEscalation ? (task.times_escalated || 0) + 1 : (task.times_escalated || 0),

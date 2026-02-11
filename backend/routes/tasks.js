@@ -8,6 +8,28 @@ const db = require('../db/bolticClient');
 const chaserEngine = require('../services/chaserEngine');
 const dayjs = require('dayjs');
 
+const TASK_FIELDS = new Set([
+  'title',
+  'description',
+  'assignee_id',
+  'assignee_email',
+  'assignee_name',
+  'status',
+  'priority',
+  'due_date',
+  'chaser_enabled',
+  'times_chased',
+  'times_escalated',
+  'last_chased_at',
+  'snoozed_until',
+  'ack_token',
+]);
+
+const pickTaskFields = (input = {}) =>
+  Object.fromEntries(
+    Object.entries(input).filter(([key, value]) => TASK_FIELDS.has(key) && value !== undefined)
+  );
+
 // ─── GET /api/tasks ─────────────────────────────────────────────────────────
 // List all tasks with optional filters
 router.get('/', async (req, res) => {
@@ -127,13 +149,11 @@ router.get('/:id', async (req, res) => {
 // ─── POST /api/tasks ──────────────────────────────────────────────────────
 router.post('/', async (req, res) => {
   try {
-    const task = await db.insert('tasks', {
-      ...req.body,
-      times_chased: 0,
-      times_escalated: 0,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    });
+    const payload = pickTaskFields(req.body);
+    payload.times_chased = payload.times_chased ?? 0;
+    payload.times_escalated = payload.times_escalated ?? 0;
+
+    const task = await db.insert('tasks', payload);
     res.status(201).json({ success: true, data: task });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -144,11 +164,14 @@ router.post('/', async (req, res) => {
 router.patch('/:id', async (req, res) => {
   try {
     const { status } = req.body;
-    const updatedData = { ...req.body, updated_at: new Date().toISOString() };
+    const updatedData = pickTaskFields(req.body);
 
-    // If marking as done, set completed_at and fire acknowledgment
+    if (Object.keys(updatedData).length === 0) {
+      return res.status(400).json({ success: false, error: 'No valid task fields provided for update' });
+    }
+
+    // If marking as done, fire acknowledgment
     if (status === 'done') {
-      updatedData.completed_at = new Date().toISOString();
       const task = await db.findById('tasks', req.params.id);
       if (task && task.status !== 'done') {
         // Fire acknowledgment workflow async (don't await)

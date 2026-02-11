@@ -3,13 +3,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ruleApi } from '../api';
 import toast from 'react-hot-toast';
 
-const TRIGGER_TYPES = [
-  { value: 'deadline_proximity', label: '⏰ Deadline Proximity', desc: 'Fire N hours before task is due' },
-  { value: 'overdue',            label: '🔴 Overdue',            desc: 'Fire when task is N days overdue' },
-  { value: 'manual',             label: '👆 Manual Only',        desc: 'Only fires on manual trigger' },
-  { value: 'weekly_digest',      label: '📬 Weekly Digest',      desc: 'Runs on a schedule (Monday 9 AM)' },
-];
-
 const PRIORITY_FILTERS = [
   { value: 'all',      label: 'All Priorities' },
   { value: 'critical', label: 'Critical Only' },
@@ -20,16 +13,10 @@ const PRIORITY_FILTERS = [
 const CHANNELS = [
   { value: 'email',   label: '📧 Email' },
   { value: 'slack',   label: '💬 Slack' },
-  { value: 'in_app',  label: '🔔 In-App' },
-  { value: 'all',     label: '📡 All Channels' },
+  { value: 'webhook', label: '🪝 Webhook' },
 ];
 
-const DEFAULT_TEMPLATES = {
-  deadline_proximity: 'Hi {{assignee_name}}, your task "{{task_title}}" is due in {{hours_until_due}} hours. Please update the status.',
-  overdue:            'Hi {{assignee_name}}, "{{task_title}}" is {{days_overdue}} day(s) overdue. This needs immediate attention.',
-  manual:             'Hi {{assignee_name}}, just following up on "{{task_title}}" (due {{due_date}}). Could you share a status update?',
-  weekly_digest:      'Good Monday, {{assignee_name}}! Here are your pending tasks for this week. Please review and update statuses.',
-};
+const DEFAULT_TEMPLATE = 'Hi {{assignee_name}}, your task "{{task_title}}" is due on {{due_date}}. Please share an update.';
 
 const VARIABLES_HELP = [
   '{{assignee_name}}', '{{task_title}}', '{{due_date}}', '{{priority}}',
@@ -37,10 +24,16 @@ const VARIABLES_HELP = [
 ];
 
 const EMPTY_RULE = {
-  name: '', description: '', trigger_type: 'deadline_proximity',
-  hours_before_due: 24, overdue_days_threshold: 1, escalate_after_days: '',
-  escalation_email: '', channel: 'email', message_template: '',
-  is_active: true, applies_to_priority: 'all',
+  name: '',
+  description: '',
+  is_active: true,
+  applies_to_priority: 'all',
+  chase_before_hours: 24,
+  escalate_after_days: 3,
+  max_chases: 3,
+  escalation_channel: 'email',
+  manual_button_enabled: true,
+  message_template: DEFAULT_TEMPLATE,
 };
 
 export default function ChaserRules() {
@@ -144,8 +137,7 @@ function RuleCard({ rule, onEdit }) {
     onError: (e) => toast.error(String(e)),
   });
 
-  const triggerConf = TRIGGER_TYPES.find(t => t.value === rule.trigger_type);
-  const channelConf = CHANNELS.find(c => c.value === rule.channel);
+  const channelConf = CHANNELS.find(c => c.value === rule.escalation_channel);
 
   return (
     <div className="card" style={{
@@ -171,17 +163,10 @@ function RuleCard({ rule, onEdit }) {
           )}
 
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            <RulePill label={triggerConf?.label || rule.trigger_type} color="var(--accent-blue)" />
-            <RulePill label={channelConf?.label || rule.channel} color="var(--accent-cyan)" />
-            {rule.hours_before_due && (
-              <RulePill label={`${rule.hours_before_due}h before due`} color="var(--accent-orange)" />
-            )}
-            {rule.overdue_days_threshold && (
-              <RulePill label={`${rule.overdue_days_threshold}d overdue`} color="var(--accent-red)" />
-            )}
-            {rule.escalate_after_days && (
-              <RulePill label={`Escalate @${rule.escalate_after_days}d`} color="var(--accent-purple)" />
-            )}
+            <RulePill label={channelConf?.label || rule.escalation_channel} color="var(--accent-cyan)" />
+            <RulePill label={`${rule.chase_before_hours}h before due`} color="var(--accent-orange)" />
+            <RulePill label={`Escalate @${rule.escalate_after_days}d`} color="var(--accent-red)" />
+            <RulePill label={`Max ${rule.max_chases} chases`} color="var(--accent-purple)" />
             {rule.applies_to_priority !== 'all' && (
               <RulePill label={`Priority: ${rule.applies_to_priority}`} color="var(--accent-yellow)" />
             )}
@@ -232,7 +217,7 @@ function RulePill({ label, color }) {
 }
 
 function RuleFormModal({ rule, onClose, onSaved }) {
-  const [form, setForm] = useState(rule || EMPTY_RULE);
+  const [form, setForm] = useState(() => ({ ...EMPTY_RULE, ...(rule || {}) }));
   const set = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
 
   const save = useMutation({
@@ -240,13 +225,6 @@ function RuleFormModal({ rule, onClose, onSaved }) {
     onSuccess: () => { toast.success(rule ? 'Rule updated' : 'Rule created'); onSaved(); },
     onError: (e) => toast.error(String(e)),
   });
-
-  const handleTriggerChange = (type) => {
-    set('trigger_type', type);
-    if (!form.message_template) {
-      set('message_template', DEFAULT_TEMPLATES[type] || '');
-    }
-  };
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -267,50 +245,44 @@ function RuleFormModal({ rule, onClose, onSaved }) {
 
         <div className="form-row">
           <div className="form-group">
-            <label>Trigger Type *</label>
-            <select value={form.trigger_type} onChange={e => handleTriggerChange(e.target.value)}>
-              {TRIGGER_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
-            </select>
+            <label>Chase Before Due (hours)</label>
+            <input
+              type="number"
+              value={form.chase_before_hours}
+              min={1}
+              max={168}
+              onChange={e => set('chase_before_hours', Number(e.target.value))}
+            />
           </div>
           <div className="form-group">
-            <label>Channel</label>
-            <select value={form.channel} onChange={e => set('channel', e.target.value)}>
+            <label>Escalate After (days)</label>
+            <input
+              type="number"
+              value={form.escalate_after_days}
+              min={1}
+              onChange={e => set('escalate_after_days', Number(e.target.value))}
+            />
+          </div>
+        </div>
+
+        <div className="form-row">
+          <div className="form-group">
+            <label>Max Chases</label>
+            <input
+              type="number"
+              value={form.max_chases}
+              min={1}
+              max={10}
+              onChange={e => set('max_chases', Number(e.target.value))}
+            />
+          </div>
+          <div className="form-group">
+            <label>Escalation Channel</label>
+            <select value={form.escalation_channel} onChange={e => set('escalation_channel', e.target.value)}>
               {CHANNELS.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
             </select>
           </div>
         </div>
-
-        {form.trigger_type === 'deadline_proximity' && (
-          <div className="form-group" style={{ marginBottom: 12 }}>
-            <label>Hours Before Due Date</label>
-            <input type="number" value={form.hours_before_due} min={1} max={168}
-              onChange={e => set('hours_before_due', parseInt(e.target.value))}
-              placeholder="e.g. 24" />
-          </div>
-        )}
-
-        {form.trigger_type === 'overdue' && (
-          <div className="form-row">
-            <div className="form-group">
-              <label>Days Overdue Threshold</label>
-              <input type="number" value={form.overdue_days_threshold} min={1}
-                onChange={e => set('overdue_days_threshold', parseInt(e.target.value))} />
-            </div>
-            <div className="form-group">
-              <label>Escalate After (days)</label>
-              <input type="number" value={form.escalate_after_days} min={1} placeholder="Optional"
-                onChange={e => set('escalate_after_days', e.target.value)} />
-            </div>
-          </div>
-        )}
-
-        {form.escalate_after_days && (
-          <div className="form-group" style={{ marginBottom: 12 }}>
-            <label>Escalation Email</label>
-            <input type="email" placeholder="manager@company.com" value={form.escalation_email}
-              onChange={e => set('escalation_email', e.target.value)} />
-          </div>
-        )}
 
         <div className="form-group" style={{ marginBottom: 12 }}>
           <label>Applies To Priority</label>
@@ -324,7 +296,7 @@ function RuleFormModal({ rule, onClose, onSaved }) {
           <textarea
             value={form.message_template}
             onChange={e => set('message_template', e.target.value)}
-            placeholder={DEFAULT_TEMPLATES[form.trigger_type]}
+            placeholder={DEFAULT_TEMPLATE}
             style={{ minHeight: '100px', fontFamily: 'IBM Plex Mono, monospace', fontSize: '12px' }}
           />
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '6px' }}>
@@ -341,6 +313,14 @@ function RuleFormModal({ rule, onClose, onSaved }) {
           <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
             Click a variable to insert it into the template
           </div>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          <input type="checkbox" id="manual_button_enabled" checked={form.manual_button_enabled}
+            onChange={e => set('manual_button_enabled', e.target.checked)} style={{ width: 16, height: 16 }} />
+          <label htmlFor="manual_button_enabled" style={{ fontSize: 13, cursor: 'pointer', color: 'var(--text-secondary)' }}>
+            Allow manual chase button
+          </label>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
