@@ -87,7 +87,7 @@ function Layout({ children, theme, onToggleTheme }) {
 }
 
 export default function App() {
-  const [theme, setTheme] = useState('light');
+  const [theme, setTheme] = useState('dark');
 
   useEffect(() => {
     const root = document.documentElement;
