@@ -33,6 +33,7 @@ const TABLES = [
       { name: 'status', type: 'dropdown', selectable_items: ['todo', 'in_progress', 'blocked', 'done', 'cancelled'], multiple_selections: false, is_nullable: false, default_value: 'todo', is_indexed: true },
       { name: 'priority', type: 'dropdown', selectable_items: ['low', 'medium', 'high', 'critical'], multiple_selections: false, is_nullable: false, default_value: 'medium' },
       { name: 'due_date', type: 'date-time', is_nullable: false, is_indexed: true },
+      { name: 'completed_at', type: 'date-time', is_nullable: true, is_indexed: true },
       { name: 'chaser_enabled', type: 'checkbox', is_nullable: false, default_value: true },
       { name: 'times_chased', type: 'number', is_nullable: false, default_value: 0 },
       { name: 'times_escalated', type: 'number', is_nullable: false, default_value: 0 },

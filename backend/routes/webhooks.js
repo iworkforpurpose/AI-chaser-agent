@@ -7,6 +7,8 @@ const router = express.Router();
 const db = require('../db/bolticClient');
 const chaserEngine = require('../services/chaserEngine');
 const scalar = (value) => (Array.isArray(value) ? value[0] : value);
+const normalizeStatus = (value) => String(scalar(value) || '').toLowerCase();
+const missingTaskIdsSeen = new Set();
 
 // Debounce Boltic cron hits so we don't run scans every minute if Boltic is scheduled that often
 const BOLTIC_CRON_COOLDOWN_MINUTES = parseInt(process.env.BOLTIC_CRON_COOLDOWN_MINUTES || '10', 10);
@@ -34,10 +36,31 @@ router.post('/boltic/task-updated', async (req, res) => {
   try {
     const { task_id, new_status, updated_by } = req.body;
     console.log(`[Webhook] Task ${task_id} updated to ${new_status}`);
+    if (!task_id) {
+      return res.status(400).json({ error: 'task_id is required' });
+    }
 
-    if (new_status === 'done') {
-      // Persist status change so future scans skip the task
-      await db.update('tasks', task_id, { status: new_status });
+    const existingTask = await db.findById('tasks', task_id);
+    if (!existingTask) {
+      return res.status(404).json({ error: `Task ${task_id} not found` });
+    }
+
+    const prevStatus = normalizeStatus(existingTask.status);
+    const nextStatus = normalizeStatus(new_status);
+    if (!nextStatus) {
+      return res.status(400).json({ error: 'new_status is required' });
+    }
+    const isDoneTransition = prevStatus !== 'done' && nextStatus === 'done';
+    const isReopenTransition = prevStatus === 'done' && nextStatus !== 'done';
+
+    const updatePayload = { status: nextStatus };
+    if (isDoneTransition) updatePayload.completed_at = new Date().toISOString();
+    if (isReopenTransition) updatePayload.completed_at = null;
+
+    // Persist status change so future scans reflect the latest lifecycle state.
+    await db.update('tasks', task_id, updatePayload);
+
+    if (isDoneTransition) {
       await chaserEngine.acknowledgeTask(task_id, updated_by);
     }
     res.json({ received: true });
@@ -165,28 +188,44 @@ logsRouter.get('/', async (req, res) => {
 
     logs = logs.slice(0, requestedLimit);
 
-    // Enrich each log with task data
-    const enrichedLogs = await Promise.all(logs.map(async (log) => {
+    // Enrich each log with task data without N+1 lookups.
+    const uniqueTaskIds = [...new Set(logs.map((log) => String(log.task_id || '')).filter(Boolean))];
+    const tasksById = new Map();
+
+    // Keep chunks modest so "id IN (...)" doesn't become too large.
+    const chunkSize = 50;
+    for (let i = 0; i < uniqueTaskIds.length; i += chunkSize) {
+      const chunk = uniqueTaskIds.slice(i, i + chunkSize);
       try {
-        const task = await db.findById('tasks', log.task_id);
-        return {
-          ...log,
-          task_title: scalar(task?.title) || 'Unknown Task',
-          assignee_name: scalar(task?.assignee_name) || null,
-          recipient_email: scalar(task?.assignee_email) || null,
-          triggered_by: log.type === 'manual' ? 'manual_user' : 'system',
-        };
+        const taskBatch = await db.find('tasks', {
+          filters: [{ field: 'id', operator: 'in', value: chunk }],
+          limit: chunk.length,
+        });
+        taskBatch.forEach((task) => {
+          const taskId = String(scalar(task.id) || '');
+          if (taskId) tasksById.set(taskId, task);
+        });
       } catch (err) {
-        console.error(`Failed to fetch task ${log.task_id}:`, err.message);
-        return {
-          ...log,
-          task_title: 'Unknown Task',
-          assignee_name: null,
-          recipient_email: null,
-          triggered_by: 'system',
-        };
+        console.error('[ChaserLogs] Failed to fetch task batch:', err.message);
       }
-    }));
+    }
+
+    const enrichedLogs = logs.map((log) => {
+      const taskId = String(log.task_id || '');
+      const task = tasksById.get(taskId);
+      if (!task && taskId && !missingTaskIdsSeen.has(taskId)) {
+        missingTaskIdsSeen.add(taskId);
+        console.warn(`[ChaserLogs] Missing task for log task_id=${taskId}; returning fallback fields`);
+      }
+
+      return {
+        ...log,
+        task_title: scalar(task?.title) || 'Unknown Task',
+        assignee_name: scalar(task?.assignee_name) || null,
+        recipient_email: scalar(task?.assignee_email) || null,
+        triggered_by: log.type === 'manual' ? 'manual_user' : 'system',
+      };
+    });
 
     res.json({ success: true, data: enrichedLogs, count: enrichedLogs.length });
   } catch (err) {

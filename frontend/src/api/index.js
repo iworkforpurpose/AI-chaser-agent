@@ -26,6 +26,7 @@ export const taskApi = {
   stats: () => api.get('/tasks/stats'),
   overdue: () => api.get('/tasks/overdue'),
   dueSoon: (h) => api.get('/tasks/due-soon', { params: { hours: h || 24 } }),
+  completed: (params) => api.get('/tasks/completed', { params }),
 
   chase: (id, triggeredBy) => api.post(`/tasks/${id}/chase`, { triggered_by: triggeredBy }),
   bulkChase: (ids, by) => api.post('/tasks/bulk-chase', { task_ids: ids, triggered_by: by }),

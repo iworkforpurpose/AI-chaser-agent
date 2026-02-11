@@ -198,12 +198,14 @@ class ChaserEngine {
       await db.update('tasks', task.id, { ack_token: ackToken });
     }
 
-    let deliveryStatus = 'sent';
+    let deliveryStatus = 'pending';
     let deliveryError = null;
 
     // 1. Trigger Boltic Workflow (skip if source is boltic to avoid loop)
     if (source === 'boltic') {
       console.log('[ChaserEngine] Skipping Boltic trigger to avoid loop');
+      deliveryStatus = 'failed';
+      deliveryError = 'Workflow trigger skipped to avoid loop (source=boltic)';
     } else {
       try {
         const workflowResult = await bolticWorkflow.triggerManualChaser({
@@ -223,9 +225,15 @@ class ChaserEngine {
           ackToken,
         });
 
-        if (workflowResult?.success === false) {
+        if (workflowResult?.success === true) {
+          deliveryStatus = 'sent';
+        } else {
           deliveryStatus = 'failed';
-          deliveryError = workflowResult.error || 'workflow trigger failed';
+          deliveryError =
+            workflowResult?.error ||
+            (workflowResult?.skipped
+              ? `Workflow trigger skipped${workflowResult.reason ? `: ${workflowResult.reason}` : ''}`
+              : 'workflow trigger failed');
         }
       } catch (err) {
         deliveryStatus = 'failed';
@@ -233,7 +241,11 @@ class ChaserEngine {
       }
     }
 
-    if (deliveryStatus === 'failed') {
+    if (deliveryStatus !== 'sent') {
+      if (!deliveryError) {
+        deliveryError = 'workflow trigger failed';
+      }
+
       // Persist failed attempt for audit/debugging, but never mask the real delivery error.
       try {
         await db.insert('chaser_logs', {
@@ -405,38 +417,73 @@ class ChaserEngine {
   async getStats() {
     const now = dayjs();
 
-    const [totalTasks, doneTasks, overdueTasks, chaserLogs] = await Promise.all([
-      db.count('tasks', [{ field: 'chaser_enabled', operator: 'eq', value: true }]),
-      db.count('tasks', [{ field: 'status', operator: 'eq', value: 'done' }]),
-      db.count('tasks', [
-        { field: 'status', operator: 'neq', value: 'done' },
-        { field: 'status', operator: 'neq', value: 'cancelled' },
-        { field: 'due_date', operator: 'lt', value: now.toISOString() },
-      ]),
-      db.find('chaser_logs', { limit: 500 }),
+    const [tasks, totalChaserLogs] = await Promise.all([
+      db.find('tasks', { limit: 2000 }),
+      db.count('chaser_logs'),
     ]);
 
-    const todayLogs = chaserLogs.filter(l => 
-      dayjs(l.sent_at).isAfter(now.startOf('day'))
-    );
+    const isClosedStatus = (status) => ['done', 'cancelled'].includes(status);
+    const normalizedTasks = tasks.map((task) => ({
+      ...task,
+      status: scalar(task.status),
+      due_date: scalar(task.due_date),
+      chaser_enabled: scalar(task.chaser_enabled) === true,
+    }));
+    const chaserEnabledTasks = normalizedTasks.filter((task) => task.chaser_enabled);
+    const totalTasks = chaserEnabledTasks.length;
+    const doneTasks = chaserEnabledTasks.filter((task) => task.status === 'done').length;
+    const overdueTasks = chaserEnabledTasks.filter((task) =>
+      !isClosedStatus(task.status) &&
+      task.due_date &&
+      dayjs(task.due_date).isBefore(now)
+    ).length;
+    const dueTodayCount = chaserEnabledTasks.filter((task) =>
+      !isClosedStatus(task.status) &&
+      task.due_date &&
+      dayjs(task.due_date).isSame(now, 'day')
+    ).length;
 
-    const acknowledgedLogs = chaserLogs.filter(l => l.status === 'acknowledged');
+    // Count log-based metrics in code because dropdown fields can be returned as arrays.
+    // DB-side filtering for status can overcount in that case.
+    let totalAcknowledgedLogs = 0;
+    let chasersSentToday = 0;
+    const pageSize = 200;
+    let offset = 0;
+
+    while (true) {
+      const logsBatch = await db.find('chaser_logs', {
+        sort: '-sent_at',
+        limit: pageSize,
+        offset,
+      });
+      if (!logsBatch.length) break;
+
+      for (const log of logsBatch) {
+        if (scalar(log.status) === 'acknowledged') {
+          totalAcknowledgedLogs += 1;
+        }
+        const sentAt = scalar(log.sent_at);
+        if (sentAt && dayjs(sentAt).isAfter(now.startOf('day'))) {
+          chasersSentToday += 1;
+        }
+      }
+
+      if (logsBatch.length < pageSize) break;
+      offset += pageSize;
+    }
+
+    const acknowledgmentRate = totalChaserLogs > 0
+      ? Math.round((totalAcknowledgedLogs / totalChaserLogs) * 1000) / 10
+      : 0;
 
     return {
       totalTasks,
       doneTasks,
       overdueTasks,
-      dueTodayCount: await db.count('tasks', [
-        { field: 'status', operator: 'neq', value: 'done' },
-        { field: 'status', operator: 'neq', value: 'cancelled' },
-        { field: 'due_date', operator: 'gte', value: now.startOf('day').toISOString() },
-        { field: 'due_date', operator: 'lte', value: now.endOf('day').toISOString() },
-      ]),
-      chasersSentToday: todayLogs.length,
-      totalChasersSent: chaserLogs.length,
-      acknowledgmentRate: chaserLogs.length > 0 
-        ? Math.round((acknowledgedLogs.length / chaserLogs.length) * 100) 
-        : 0,
+      dueTodayCount,
+      chasersSentToday,
+      totalChasersSent: totalChaserLogs,
+      acknowledgmentRate,
       completionRate: totalTasks > 0 
         ? Math.round((doneTasks / totalTasks) * 100) 
         : 0,

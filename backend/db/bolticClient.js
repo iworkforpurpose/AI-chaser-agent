@@ -246,7 +246,31 @@ class BolticDB {
       db_id: this.dbId,
     });
     if (res?.error) throw new Error(res.error.meta?.join(', ') || res.error.message || 'Count failed');
-    return res.pagination?.total_count || (res.data ? res.data.length : 0);
+
+    if (typeof res.pagination?.total_count === 'number') {
+      return res.pagination.total_count;
+    }
+
+    // Fallback when SDK/endpoint omits pagination metadata:
+    // scan pages and count rows explicitly.
+    const pageSize = 200;
+    let page = 1;
+    let total = 0;
+    while (true) {
+      const pageRes = await this.client.records.findAll(collection, {
+        where,
+        per_page: pageSize,
+        page,
+        db_id: this.dbId,
+      });
+      if (pageRes?.error) throw new Error(pageRes.error.meta?.join(', ') || pageRes.error.message || 'Count failed');
+
+      const rows = pageRes.data || [];
+      total += rows.length;
+      if (!rows.length || rows.length < pageSize) break;
+      page += 1;
+    }
+    return total;
   }
 
   /**
