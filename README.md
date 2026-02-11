@@ -1,245 +1,273 @@
-# ⚡ Automatic Chaser Agent
-> Automated deadline-chasing system powered by Express.js + Boltic + React
+# Automatic Chaser Agent
 
-An intelligent program manager that never sleeps — automatically sends personalized reminders, escalations, and acknowledgments so your team never misses a deadline.
+Automated deadline chasing system built with React + Express + Boltic DB + Boltic Workflows.
 
----
+The app continuously monitors tasks, sends reminders/escalations, logs every chase attempt, tracks acknowledgments, and reports completed work with filters.
 
-## 🏗️ Architecture
+## What Problem This Solves
 
+Teams often miss deadlines because follow-ups are manual and inconsistent. This project automates that follow-up loop.
+
+Use cases:
+- Program managers who need automatic nudges before/after due dates.
+- Teams that want auditability of every reminder sent.
+- Leadership that wants completion visibility by member and date range.
+
+## End-to-End Chaser Flow
+
+### 1) Task creation and tracking
+- Tasks are stored in Boltic DB (`tasks` table).
+- Task includes assignee, status, due date, priority, and chase counters.
+- `completed_at` is managed by backend when status transitions to/from `done`.
+
+### 2) Triggering a chase
+There are two paths:
+1. Automatic scan:
+- Cron or webhook trigger starts scan (`/api/run-chaser` or `/api/webhooks/boltic/cron-trigger`).
+- Engine evaluates active tasks against chaser rules.
+- Cooldown and snooze checks prevent spam.
+
+2. Manual chase:
+- User clicks `Send chase` in UI.
+- Backend calls manual chase path for that task.
+- Tone changes based on previous chase count (friendly -> firm -> urgent).
+
+### 3) Delivery attempt
+- Backend sends payload to Boltic workflow webhook (email/slack path).
+- If webhook URL is missing or call fails, delivery is marked failed.
+- If success, delivery is marked sent.
+
+### 4) Logging and counters
+- Each attempt is written to `chaser_logs` with status (`sent`, `failed`, `acknowledged`).
+- On success, task counters update (`times_chased`, `times_escalated`, `last_chased_at`).
+- Activity Log page reads from `/api/chaser-logs`.
+
+### 5) Completion and acknowledgment
+- When task moves to `done` (API patch or webhook update), backend sets `completed_at`.
+- Backend triggers acknowledgment workflow.
+- If task reopens (done -> non-done), backend clears `completed_at`.
+
+### 6) Dashboard reporting
+- Overdue card shows open overdue tasks.
+- Completed Tasks card uses `/api/tasks/completed` with filters:
+  - Presets: Today, Last 7 Days, Last 30 Days (default)
+  - Custom From/To date range
+  - Member filter by assignee email
+- Completed results are sorted by latest `completed_at` first.
+
+## Architecture
+
+```text
+Frontend (React, Vercel)
+  -> /api/* rewrite
+Backend (Express, Render)
+  -> Boltic DB (tasks, rules, logs, users)
+  -> Boltic Workflows (manual chase, ack, escalation, digest)
 ```
-React Frontend (Port 3000)
-    ↓ REST API
-Express.js Backend (Port 5000)
-    ↓ Boltic DB API         ↓ Boltic Webhooks
-Boltic Database        Boltic Workflows
- (tasks, logs,          (email/slack/cron
-  rules, users)          automations)
+
+## Repo Structure
+
+```text
+backend/
+  db/
+  routes/
+  services/
+  scripts/
+  server.js
+frontend/
+  src/
+  public/
+README.md
 ```
 
----
+## Local Development
 
-## 🚀 Quick Start
+### Prerequisites
+- Node.js 18+
+- npm
+- Boltic account + API key + database
 
-### 1. Clone & Install
+### Install
 
 ```bash
-# Backend
 cd backend && npm install
-
-# Frontend
 cd ../frontend && npm install
 ```
 
-### 2. Configure Environment
+### Configure backend env (`backend/.env`)
 
-```bash
-# backend/.env  (copy from .env.example)
-cp .env.example .env
-```
+Required for full functionality:
+- `BOLTIC_API_KEY`
+- `BOLTIC_DATABASE_ID`
+- `APP_BASE_URL`
+- `FRONTEND_URL`
+- `BOLTIC_WEBHOOK_MANUAL_CHASER`
+- `BOLTIC_WEBHOOK_ACKNOWLEDGMENT`
 
-Fill in:
-- `BOLTIC_API_KEY` — from Boltic Settings → API Keys
-- `BOLTIC_WORKSPACE_ID` — from Boltic workspace URL
-- `BOLTIC_DATABASE_ID` — from Boltic DB settings
-- Webhook URLs (see Boltic Setup below)
+Optional but commonly used:
+- `BOLTIC_WEBHOOK_ESCALATION`
+- `BOLTIC_WEBHOOK_WEEKLY_DIGEST`
+- `BOLTIC_WEBHOOK_BULK_CHASER`
+- `CHASER_CRON_SCHEDULE` (default `0 * * * *`)
+- `BOLTIC_CRON_COOLDOWN_MINUTES` (default `10`)
 
-### 3. Initialize Boltic Database
+### Init and seed DB
 
 ```bash
 cd backend
-npm run db:init   # Creates collections in Boltic
-npm run db:seed   # Adds sample data
+npm run db:init
+npm run db:seed
 ```
 
-### 4. Start Development
+### Completed timestamp migration
 
 ```bash
-# Terminal 1 — Backend
-cd backend && npm run dev
-
-# Terminal 2 — Frontend
-cd frontend && npm start
-
-# Terminal 3 — Expose local server to Boltic (for webhooks)
-npx ngrok http 5000
-# Copy the https URL → use in Boltic webhook configs
+cd backend
+npm run db:migrate:completed-at
 ```
 
----
+### Run app
 
-## 🔧 Boltic Setup Guide
+```bash
+# terminal 1
+cd backend && npm run dev
 
-### A. Create the Database
+# terminal 2
+cd frontend && npm start
+```
 
-1. Go to **Boltic → Databases → New Database**
-2. Name it `chaser-agent`
-3. Copy the **Database ID** to your `.env`
+Backend health check:
+- `GET http://localhost:5000/api/health`
 
-### B. Set Up Workflows
+## Backend Scripts
 
-You need **4 workflows** in Boltic:
+From `backend/`:
+- `npm start` -> start API server
+- `npm run dev` -> start with nodemon
+- `npm run db:init` -> create DB schema
+- `npm run db:seed` -> insert sample data
+- `npm run db:migrate:completed-at` -> add/backfill `completed_at`
 
----
+## API Overview
 
-#### Workflow 1: `hourly-chaser-cron`
-**Purpose**: Automatically scan tasks every hour
-
-| Step | Action |
-|------|--------|
-| Trigger | ⏰ Schedule — Every 1 hour |
-| Step 1 | HTTP Request → POST `{YOUR_API}/api/webhooks/boltic/cron-trigger` |
-| Done | Backend runs the full scan |
-
-**Env var**: No webhook needed for this one (it calls your API)
-
----
-
-#### Workflow 2: `manual-chaser-webhook`
-**Purpose**: Send notification when a task is chased
-
-| Step | Action |
-|------|--------|
-| Trigger | 🔗 Webhook (copy URL → `BOLTIC_WEBHOOK_MANUAL_CHASER`) |
-| Step 1 | Parse payload — get `channel`, `message`, `assignee_email` |
-| Step 2 | Branch: if `channel == email` → Gmail step |
-| Step 3a | Gmail: Send to `{{assignee_email}}`, subject `Re: {{task_title}}`, body `{{message}}` |
-| Step 3b | Slack: Post message to `#general` or DM |
-| Step 4 | HTTP POST → `{YOUR_API}/api/webhooks/boltic/delivery-confirm` with `task_id`, `status: delivered` |
-
-**Env var**: `BOLTIC_WEBHOOK_MANUAL_CHASER=https://your-boltic-webhook-url`
-
----
-
-#### Workflow 3: `task-acknowledgment`
-**Purpose**: Celebrate when a task is completed
-
-| Step | Action |
-|------|--------|
-| Trigger | 🔗 Webhook (copy URL → `BOLTIC_WEBHOOK_ACKNOWLEDGMENT`) |
-| Step 1 | Send email to `{{assignee_email}}`: "🎉 Well done completing {{task_title}}!" |
-| Step 2 | Send email to `{{reporter_email}}` (if different): "✅ {{assignee_name}} completed {{task_title}}" |
-
-**Env var**: `BOLTIC_WEBHOOK_ACKNOWLEDGMENT=https://your-boltic-webhook-url`
-
----
-
-#### Workflow 4: `weekly-digest` *(optional but impressive)*
-**Purpose**: Monday morning task summary
-
-| Step | Action |
-|------|--------|
-| Trigger | ⏰ Schedule — Every Monday 9:00 AM |
-| Step 1 | HTTP GET `{YOUR_API}/api/tasks/weekly-digest` |
-| Step 2 | For each user in response, send personalized digest email |
-
----
-
-### C. Database Collections
-
-The `npm run db:init` script creates these automatically:
-
-| Collection | Purpose |
-|-----------|---------|
-| `tasks` | All tasks with due dates, assignees, status |
-| `users` | Team members |
-| `projects` | Project groupings |
-| `chaser_rules` | Automation rules (when/how to chase) |
-| `chaser_logs` | Every chaser event ever fired |
-| `notifications` | In-app notification inbox |
-
----
-
-## 📡 API Reference
+### Core
+- `GET /api/health`
+- `POST /api/run-chaser`
+- `GET /api/users`
 
 ### Tasks
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/tasks` | List all tasks (filterable) |
-| GET | `/api/tasks/stats` | Dashboard KPI stats |
-| GET | `/api/tasks/due-soon?hours=24` | Tasks due within N hours |
-| GET | `/api/tasks/overdue` | All overdue tasks |
-| POST | `/api/tasks` | Create task |
-| PATCH | `/api/tasks/:id` | Update task (auto-fires ack on done) |
-| POST | `/api/tasks/:id/chase` | Manual chase trigger |
-| POST | `/api/tasks/:id/snooze` | Snooze chaser |
-| POST | `/api/tasks/:id/acknowledge` | Mark as acknowledged |
-| POST | `/api/tasks/bulk-chase` | Chase multiple tasks at once |
+- `GET /api/tasks`
+- `GET /api/tasks/:id`
+- `POST /api/tasks`
+- `PATCH /api/tasks/:id`
+- `DELETE /api/tasks/:id`
+- `GET /api/tasks/stats`
+- `GET /api/tasks/due-soon?hours=24`
+- `GET /api/tasks/overdue`
+- `GET /api/tasks/weekly-digest`
+- `GET /api/tasks/completed`
+- `POST /api/tasks/:id/chase`
+- `POST /api/tasks/:id/snooze`
+- `POST /api/tasks/:id/acknowledge`
+- `POST /api/tasks/bulk-chase`
 
-### Chaser
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/chaser-rules` | List all rules |
-| POST | `/api/chaser-rules` | Create rule |
-| PATCH | `/api/chaser-rules/:id` | Update rule |
-| GET | `/api/chaser-logs` | Activity log |
-| POST | `/api/run-chaser` | Manually trigger full scan |
+### Rules and Logs
+- `GET /api/chaser-rules`
+- `POST /api/chaser-rules`
+- `PATCH /api/chaser-rules/:id`
+- `DELETE /api/chaser-rules/:id`
+- `GET /api/chaser-logs`
 
-### Webhooks (called by Boltic)
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/webhooks/boltic/cron-trigger` | Boltic's cron hits this |
-| POST | `/api/webhooks/boltic/delivery-confirm` | After email sent |
-| POST | `/api/webhooks/boltic/task-updated` | Status change events |
-| GET | `/api/webhooks/snooze?task_id=X&hours=4` | Snooze link in emails |
+### Webhooks
+- `POST /api/webhooks/boltic/cron-trigger`
+- `POST /api/webhooks/boltic/delivery-confirm`
+- `POST /api/webhooks/boltic/task-updated`
+- `POST /api/webhooks/manual-chase`
+- `GET /api/webhooks/snooze?task_id=<id>&hours=4`
 
----
+## Frontend Pages
 
-## 🧠 Chaser Engine Logic
+- `/` Dashboard:
+  - KPI cards
+  - Overdue Tasks panel
+  - Completed Tasks panel with date/member filters
+- `/tasks` Task Board
+- `/log` Activity Log
+- `/rules` Chaser Rules
 
-The `ChaserEngine` service:
+## Deployment (Current Recommended)
 
-1. **Loads** all non-done tasks with `chaser_enabled: true`
-2. **Loads** all active chaser rules
-3. **For each task**, evaluates every rule:
-   - `deadline_proximity`: hours until due ≤ threshold?
-   - `overdue`: days overdue ≥ threshold?
-4. **Spam protection**: skips tasks chased within last 6 hours
-5. **Snooze respect**: skips tasks with active snooze
-6. **Fires** Boltic webhook with full context
-7. **Logs** every event to `chaser_logs` collection
-8. **Updates** task's `chaser_count` and `last_chased_at`
+### Backend on Render
 
-### Context-Aware Tone (Manual Chase)
-| Chase Count | Tone | Example |
-|------------|------|---------|
-| 0 | Friendly | "Hey! Just checking in 😊" |
-| 1-2 | Firm | "Follow-up on pending task" |
-| 3+ | Urgent | "⚠️ Critical — immediate action required" |
+Service settings:
+- Root directory: `backend`
+- Build command: `npm ci`
+- Start command: `npm start`
 
----
+Set Render env vars:
+- `NODE_ENV=production`
+- `BOLTIC_API_KEY=...`
+- `BOLTIC_DATABASE_ID=...`
+- `APP_BASE_URL=https://<your-render-service>.onrender.com`
+- `FRONTEND_URL=https://<your-vercel-domain>.vercel.app`
+- workflow vars as needed
 
-## 🗺️ Frontend Pages
+Health URL:
+- `https://<your-render-service>.onrender.com/api/health`
 
-| Page | Route | Purpose |
-|------|-------|---------|
-| Dashboard | `/` | KPI stats, overdue list, activity feed, "Run Chaser" button |
-| Task Board | `/tasks` | Kanban by status, Chase buttons, bulk select, create task |
-| Activity Log | `/log` | Full timeline of all chaser events, filterable |
-| Chaser Rules | `/rules` | Create/edit/toggle automation rules |
+Note:
+- `GET /` on backend returns 404 by design (`Route not found`), because backend is API-only.
 
----
+### Frontend on Vercel
 
-## 🏆 Key Features
+Project settings:
+- Root directory: `frontend`
+- Build command: `npm run build`
+- Output directory: `build`
 
-- ⚡ **One-click chase** on any task card
-- 📦 **Bulk chase** — select multiple tasks and chase at once  
-- 💤 **Snooze** — stop chasing a task for N hours
-- 📈 **Context-aware tone** — tone escalates with each follow-up
-- 🚨 **Escalation** — auto-CC manager when critically overdue
-- 📬 **Weekly digest** — Monday summary via Boltic cron
-- 📋 **Activity log** — every chaser event logged and auditable
-- ⚙️ **Configurable rules** — no-code rule builder in UI
+Create `frontend/vercel.json`:
 
----
+```json
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://<your-render-service>.onrender.com/api/:path*"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
+```
 
-## 🔌 Tech Stack
+This rewrite keeps frontend API calls as relative `/api/...`.
 
-| Layer | Technology |
-|-------|-----------|
-| Frontend | React 18, React Query, React Router |
-| Backend | Express.js, Node.js, node-cron |
-| Database | Boltic Database (via REST API) |
-| Automation | Boltic Workflows (webhooks + cron) |
-| Notifications | Boltic Gmail/Slack connectors |
-| Tunnel (dev) | ngrok |
+## Troubleshooting
+
+### Empty dashboard after Vercel deploy
+- Ensure `frontend/vercel.json` is committed and deployed.
+- Ensure Vercel root directory is `frontend`.
+- Check `https://<vercel-domain>/api/health` returns backend response.
+- Check Render service is awake and env vars are set.
+
+### Chases show in UI but email not sent
+- Usually workflow webhook URL is missing/disabled or credits exhausted.
+- Check backend logs for workflow trigger errors/skips.
+- In this app, delivery failures are logged in `chaser_logs` with `status=failed`.
+
+### Overdue/completed count confusion
+- Dashboard `Active Tasks` currently reflects total chaser-enabled tasks, not only open tasks.
+
+## Tech Stack
+
+- Frontend: React 18, React Query, React Router, Axios
+- Backend: Node.js, Express, node-cron
+- Data: Boltic DB via `@boltic/sdk`
+- Automation: Boltic Workflows (webhooks + schedules)
+
+## License
+
+For internal/hackathon use. Add a formal license if you plan public distribution.
