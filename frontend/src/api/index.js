@@ -13,6 +13,9 @@ api.interceptors.response.use(
   (err) => Promise.reject(err.response?.data?.error || err.message)
 );
 
+export const currentUserEmail = import.meta.env.VITE_USER_EMAIL || 'vighurnama@gmail.com';
+export const currentUserName = 'Vighnesh Nama';
+
 // ─── Tasks ────────────────────────────────────────────────────────────────────
 export const taskApi = {
   list:         (params) => api.get('/tasks', { params }),

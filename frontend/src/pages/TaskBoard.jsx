@@ -181,6 +181,14 @@ function TaskCard({ task, onClick, isSelected, onToggleBulk }) {
   const qc = useQueryClient();
   const isOverdue = dayjs(task.due_date).isBefore(dayjs()) && task.status !== 'done';
 
+  const priorityColor = {
+    critical: '#ef4444',
+    high: '#f59e0b',
+    medium: '#3b82f6',
+    low: '#9ca3af',
+  };
+  const accentColor = priorityColor[task.priority] || '#9ca3af';
+
   const chase = useMutation({
     mutationFn: (e) => { e.stopPropagation(); return taskApi.chase(task.id, 'board_user'); },
     onSuccess: () => { toast.success(`Chase sent to ${task.assignee_name}`); qc.invalidateQueries(['tasks']); },
@@ -211,6 +219,18 @@ function TaskCard({ task, onClick, isSelected, onToggleBulk }) {
         background: 'var(--bg-card)',
       }}
     >
+      <div
+        style={{
+          position: 'absolute',
+          top: 8,
+          bottom: 8,
+          left: 0,
+          width: 4,
+          borderRadius: '8px',
+          background: accentColor,
+          boxShadow: '0 0 8px rgba(0,0,0,0.08)',
+        }}
+      />
       {isOverdue && (
         <div style={{
           position: 'absolute', top: 0, left: 0, right: 0, height: 2,

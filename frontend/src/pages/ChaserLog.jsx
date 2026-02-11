@@ -140,7 +140,7 @@ export default function ChaserLog() {
                   <span style={{ color: 'var(--border-light)' }}>({dateLogs.length})</span>
                 </div>
 
-                <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {dateLogs.map((log, i) => (
                     <LogRow key={log.id} log={log} isLast={i === dateLogs.length - 1} />
                   ))}
@@ -154,20 +154,19 @@ export default function ChaserLog() {
 }
 
 function LogRow({ log, isLast }) {
-  const [expanded, setExpanded] = useState(false);
   const trigger = TRIGGER_CONFIG[log.trigger_type] || { label: log.trigger_type, color: 'var(--text-muted)', icon: '📡' };
   const status  = STATUS_CONFIG[log.status]        || { label: log.status,       color: 'var(--text-muted)' };
 
   return (
-    <div style={{
-      borderBottom: isLast ? 'none' : '1px solid var(--border)',
-      cursor: 'pointer', transition: 'background 0.1s',
-    }}
-      onClick={() => setExpanded(!expanded)}
-    >
+    <div className="card" style={{
+      border: '1px solid var(--border)',
+      borderRadius: 'var(--radius)',
+      transition: 'background 0.1s',
+      marginBottom: isLast ? 0 : '0px'
+    }}>
       <div style={{
         display: 'flex', alignItems: 'center', gap: '14px',
-        padding: '14px 18px',
+        padding: '10px 16px',
       }}>
         {/* Trigger type dot */}
         <div style={{
@@ -208,17 +207,23 @@ function LogRow({ log, isLast }) {
         <span style={{ fontSize: '11px', color: 'var(--text-muted)', flexShrink: 0, fontFamily: 'IBM Plex Mono, monospace' }}>
           {dayjs(log.sent_at).format('h:mm A')}
         </span>
+      </div>
 
-        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{expanded ? '▲' : '▼'}</span>
+      <div style={{
+        padding: '0 16px 10px 44px',
+        fontSize: '11px', color: 'var(--text-muted)',
+        fontFamily: 'IBM Plex Mono, monospace'
+      }}>
+        For {log.recipient_email}
       </div>
 
       {/* Expanded message preview */}
-      {expanded && log.message_sent && (
+      {log.message_sent && (
         <div style={{
-          padding: '0 18px 14px 46px',
+          padding: '0 16px 10px 44px',
           fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.6,
           background: 'rgba(255,255,255,0.02)',
-          borderTop: '1px solid var(--border)', paddingTop: '12px'
+          borderTop: '1px solid var(--border)', paddingTop: '8px'
         }}>
           <div style={{ fontFamily: 'IBM Plex Mono, monospace', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '6px' }}>
             MESSAGE SENT:
