@@ -6,6 +6,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db/bolticClient');
 const chaserEngine = require('../services/chaserEngine');
+const scalar = (value) => (Array.isArray(value) ? value[0] : value);
 
 // Debounce Boltic cron hits so we don't run scans every minute if Boltic is scheduled that often
 const BOLTIC_CRON_COOLDOWN_MINUTES = parseInt(process.env.BOLTIC_CRON_COOLDOWN_MINUTES || '10', 10);
@@ -76,7 +77,7 @@ router.post('/boltic/cron-trigger', async (req, res) => {
 router.post('/manual-chase', async (req, res) => {
   try {
     const { task_id } = req.body;
-    await chaserEngine.runManualChase(task_id);
+    await chaserEngine.manualChase(task_id, 'webhook_manual');
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -107,17 +108,87 @@ const logsRouter = express.Router();
 
 logsRouter.get('/', async (req, res) => {
   try {
-    const { task_id, type, limit = 100 } = req.query;
+    const { task_id, type, status, limit = 100 } = req.query;
+    const requestedLimit = Number.parseInt(limit, 10) || 100;
     const filters = [];
     if (task_id) filters.push({ field: 'task_id', operator: 'eq', value: task_id });
-    if (type)    filters.push({ field: 'type',    operator: 'eq', value: type });
 
-    const logs = await db.find('chaser_logs', {
-      filters,
-      sort: '-sent_at',
-      limit: parseInt(limit),
+    const normalizeLog = (log) => ({
+      ...log,
+      task_id: scalar(log.task_id),
+      rule_id: scalar(log.rule_id),
+      type: scalar(log.type),
+      status: scalar(log.status),
+      channel: scalar(log.channel),
+      sent_at: scalar(log.sent_at),
+      acknowledged_at: scalar(log.acknowledged_at),
     });
-    res.json({ success: true, data: logs, count: logs.length });
+
+    const matchesFilters = (log) => {
+      if (type && log.type !== type) return false;
+      if (status && log.status !== status) return false;
+      return true;
+    };
+
+    let logs = [];
+    if (type || status) {
+      // Type/status are dropdown fields in Boltic and may be returned as arrays.
+      // Fetch pages, normalize to scalars, then filter deterministically.
+      const pageSize = 200;
+      let offset = 0;
+      let keepFetching = true;
+
+      while (keepFetching && logs.length < requestedLimit) {
+        const batch = await db.find('chaser_logs', {
+          filters,
+          sort: '-sent_at',
+          limit: pageSize,
+          offset,
+        });
+
+        if (!batch.length) break;
+
+        const matchedBatch = batch.map(normalizeLog).filter(matchesFilters);
+        logs.push(...matchedBatch);
+
+        keepFetching = batch.length === pageSize;
+        offset += pageSize;
+      }
+    } else {
+      const rawLogs = await db.find('chaser_logs', {
+        filters,
+        sort: '-sent_at',
+        limit: requestedLimit,
+      });
+      logs = rawLogs.map(normalizeLog);
+    }
+
+    logs = logs.slice(0, requestedLimit);
+
+    // Enrich each log with task data
+    const enrichedLogs = await Promise.all(logs.map(async (log) => {
+      try {
+        const task = await db.findById('tasks', log.task_id);
+        return {
+          ...log,
+          task_title: scalar(task?.title) || 'Unknown Task',
+          assignee_name: scalar(task?.assignee_name) || null,
+          recipient_email: scalar(task?.assignee_email) || null,
+          triggered_by: log.type === 'manual' ? 'manual_user' : 'system',
+        };
+      } catch (err) {
+        console.error(`Failed to fetch task ${log.task_id}:`, err.message);
+        return {
+          ...log,
+          task_title: 'Unknown Task',
+          assignee_name: null,
+          recipient_email: null,
+          triggered_by: 'system',
+        };
+      }
+    }));
+
+    res.json({ success: true, data: enrichedLogs, count: enrichedLogs.length });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

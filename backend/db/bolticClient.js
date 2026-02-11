@@ -21,16 +21,148 @@ class BolticDB {
   buildWhere(filters = []) {
     if (!filters.length) return undefined;
     const where = {};
+
+    const toCondition = (operator, value) => {
+      if (operator === 'eq') return value;
+      if (operator === 'neq') return { $ne: value };
+      if (operator === 'gt') return { $gt: value };
+      if (operator === 'gte') return { $gte: value };
+      if (operator === 'lt') return { $lt: value };
+      if (operator === 'lte') return { $lte: value };
+      if (operator === 'in') return { $in: Array.isArray(value) ? value : [value] };
+      if (operator === 'contains') return { $ilike: `%${String(value)}%` };
+      return undefined;
+    };
+
+    const asObjectCondition = (value) => {
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        return { ...value };
+      }
+      return { $eq: value };
+    };
+
     for (const f of filters) {
       const { field, operator, value } = f;
-      if (operator === 'eq') where[field] = value;
-      else if (operator === 'neq') where[field] = { $ne: value };
-      else if (operator === 'gt') where[field] = { $gt: value };
-      else if (operator === 'gte') where[field] = { $gte: value };
-      else if (operator === 'lt') where[field] = { $lt: value };
-      else if (operator === 'lte') where[field] = { $lte: value };
-      else if (operator === 'in') where[field] = { $in: value };
-      else if (operator === 'contains') where[field] = { $contains: value };
+      const condition = toCondition(operator, value);
+      if (!field || !condition) continue;
+
+      if (!Object.prototype.hasOwnProperty.call(where, field)) {
+        where[field] = condition;
+        continue;
+      }
+
+      const merged = asObjectCondition(where[field]);
+      const incoming = asObjectCondition(condition);
+      const markImpossible = () => {
+        merged.$in = [];
+        delete merged.$eq;
+      };
+
+      Object.entries(incoming).forEach(([key, incomingValue]) => {
+        if (key === '$eq') {
+          if (merged.$eq !== undefined && merged.$eq !== incomingValue) {
+            markImpossible();
+            return;
+          }
+          if (Array.isArray(merged.$in)) {
+            merged.$in = merged.$in.filter(v => v === incomingValue);
+            return;
+          }
+          if (merged.$ne !== undefined && merged.$ne === incomingValue) {
+            markImpossible();
+            return;
+          }
+          if (Array.isArray(merged.$notIn) && merged.$notIn.includes(incomingValue)) {
+            markImpossible();
+            return;
+          }
+          merged.$eq = incomingValue;
+          return;
+        }
+
+        // Preserve AND semantics for repeated "not equals" filters on one field.
+        if (key === '$ne') {
+          if (merged.$eq !== undefined && merged.$eq === incomingValue) {
+            markImpossible();
+            return;
+          }
+          if (Array.isArray(merged.$notIn)) {
+            if (!merged.$notIn.includes(incomingValue)) {
+              merged.$notIn.push(incomingValue);
+            }
+            return;
+          }
+          if (merged.$ne !== undefined) {
+            merged.$notIn = [merged.$ne, incomingValue].filter((v, i, arr) => arr.indexOf(v) === i);
+            delete merged.$ne;
+            return;
+          }
+        }
+
+        if (key === '$in') {
+          const values = Array.isArray(incomingValue) ? incomingValue : [incomingValue];
+          if (Array.isArray(merged.$in)) {
+            merged.$in = merged.$in.filter(v => values.includes(v));
+            return;
+          }
+          if (merged.$eq !== undefined) {
+            if (!values.includes(merged.$eq)) {
+              markImpossible();
+            }
+            return;
+          }
+        }
+
+        if (key === '$gt' || key === '$gte') {
+          const existingStrict = merged.$gt;
+          const existingInclusive = merged.$gte;
+          if (key === '$gt') {
+            if (existingStrict === undefined || incomingValue > existingStrict) {
+              merged.$gt = incomingValue;
+            }
+            if (existingInclusive !== undefined && existingInclusive >= merged.$gt) {
+              delete merged.$gte;
+            }
+          } else {
+            if (existingInclusive === undefined || incomingValue > existingInclusive) {
+              merged.$gte = incomingValue;
+            }
+            if (existingStrict !== undefined && incomingValue >= existingStrict) {
+              delete merged.$gt;
+              merged.$gte = incomingValue;
+            }
+          }
+          return;
+        }
+
+        if (key === '$lt' || key === '$lte') {
+          const existingStrict = merged.$lt;
+          const existingInclusive = merged.$lte;
+          if (key === '$lt') {
+            if (existingStrict === undefined || incomingValue < existingStrict) {
+              merged.$lt = incomingValue;
+            }
+            if (existingInclusive !== undefined && existingInclusive <= merged.$lt) {
+              delete merged.$lte;
+            }
+          } else {
+            if (existingInclusive === undefined || incomingValue < existingInclusive) {
+              merged.$lte = incomingValue;
+            }
+            if (existingStrict !== undefined && incomingValue <= existingStrict) {
+              delete merged.$lt;
+              merged.$lte = incomingValue;
+            }
+          }
+          return;
+        }
+
+        merged[key] = incomingValue;
+      });
+
+      where[field] = (Object.keys(merged).length === 1 && Object.prototype.hasOwnProperty.call(merged, '$eq'))
+        ? merged.$eq
+        : merged;
     }
     return where;
   }

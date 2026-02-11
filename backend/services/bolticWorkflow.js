@@ -40,7 +40,12 @@ class BolticWorkflowService {
     } catch (err) {
       console.error(`[BolticWorkflow] ❌ Workflow trigger failed:`, err.response?.data || err.message);
       // Don't throw — workflow failure shouldn't break the main flow
-      return { success: false, error: err.message };
+      const code = err.response?.data?.error?.code || err.response?.status;
+      const message =
+        err.response?.data?.error?.message ||
+        err.response?.data?.message ||
+        err.message;
+      return { success: false, error: message, code };
     }
   }
 

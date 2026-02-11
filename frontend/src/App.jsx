@@ -6,7 +6,8 @@ import Dashboard from './pages/Dashboard';
 import TaskBoard from './pages/TaskBoard';
 import ChaserLog from './pages/ChaserLog';
 import ChaserRules from './pages/ChaserRules';
-import { notifApi } from './api';
+// Notifications feature not yet implemented
+// import { notifApi } from './api';
 import './App.css';
 
 const queryClient = new QueryClient({
@@ -15,19 +16,19 @@ const queryClient = new QueryClient({
 
 function Sidebar({ theme, onToggleTheme }) {
   const location = useLocation();
-  const { data: notifs } = useQuery({
-    queryKey: ['notifications'],
-    queryFn: () => notifApi.list('arjun@acme.com'),
-    refetchInterval: 30000,
-  });
-
-  const unreadCount = notifs?.data?.filter(n => !n.read).length || 0;
+  // TODO: Implement notifications feature
+  // const { data: notifs } = useQuery({
+  //   queryKey: ['notifications'],
+  //   queryFn: () => notifApi.list('arjun@acme.com'),
+  //   refetchInterval: 30000,
+  // });
+  // const unreadCount = notifs?.data?.filter(n => !n.read).length || 0;
 
   const navItems = [
-    { to: '/',            icon: '▦',  label: 'Dashboard' },
-    { to: '/tasks',       icon: '⊞',  label: 'Task Board' },
-    { to: '/log',         icon: '◈',  label: 'Activity Log' },
-    { to: '/rules',       icon: '⚙',  label: 'Chaser Rules' },
+    { to: '/', icon: '▦', label: 'Dashboard' },
+    { to: '/tasks', icon: '⊞', label: 'Task Board' },
+    { to: '/log', icon: '◈', label: 'Activity Log' },
+    { to: '/rules', icon: '⚙', label: 'Chaser Rules' },
   ];
 
   return (
@@ -48,9 +49,10 @@ function Sidebar({ theme, onToggleTheme }) {
           >
             <span className="nav-icon">{item.icon}</span>
             <span className="nav-label">{item.label}</span>
-            {item.label === 'Activity Log' && unreadCount > 0 && (
+            {/* Notification badge disabled until backend endpoint exists */}
+            {/* {item.label === 'Activity Log' && unreadCount > 0 && (
               <span className="nav-badge">{unreadCount}</span>
-            )}
+            )} */}
           </NavLink>
         ))}
       </nav>
@@ -100,10 +102,10 @@ export default function App() {
       <BrowserRouter>
         <Layout theme={theme} onToggleTheme={toggleTheme}>
           <Routes>
-            <Route path="/"       element={<Dashboard />} />
-            <Route path="/tasks"  element={<TaskBoard />} />
-            <Route path="/log"    element={<ChaserLog />} />
-            <Route path="/rules"  element={<ChaserRules />} />
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/tasks" element={<TaskBoard />} />
+            <Route path="/log" element={<ChaserLog />} />
+            <Route path="/rules" element={<ChaserRules />} />
           </Routes>
         </Layout>
         <Toaster

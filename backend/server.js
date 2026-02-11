@@ -1,5 +1,5 @@
 /**
- * Chaser Agent — Express.js Server
+ * Automatic Chaser Agent — Express.js Server
  * Main entry point
  */
 
@@ -20,6 +20,8 @@ const db = require('./db/bolticClient');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const CRON_SCHEDULE = process.env.CHASER_CRON_SCHEDULE || '0 * * * *'; // Every hour
+const CRON_TIMEZONE = 'Asia/Kolkata';
 
 app.set('trust proxy', 1);
 
@@ -58,8 +60,12 @@ app.get('/api/health', async (req, res) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     version: '1.0.0',
-    service: 'Chaser Agent API',
+    service: 'Automatic Chaser Agent API',
     db: dbStatus,
+    chaser: {
+      cron_schedule: CRON_SCHEDULE,
+      timezone: CRON_TIMEZONE,
+    },
   });
 });
 
@@ -85,8 +91,6 @@ app.use((err, req, res, next) => {
 });
 
 // ─── Cron Jobs ────────────────────────────────────────────────────────────────
-const CRON_SCHEDULE = process.env.CHASER_CRON_SCHEDULE || '0 * * * *'; // Every hour
-
 if (process.env.NODE_ENV !== 'test') {
   cron.schedule(CRON_SCHEDULE, async () => {
     console.log('\n⏰ [CRON] Hourly chaser scan triggered');
@@ -95,7 +99,7 @@ if (process.env.NODE_ENV !== 'test') {
     } catch (err) {
       console.error('[CRON] Chaser scan failed:', err.message);
     }
-  }, { timezone: 'Asia/Kolkata' });
+  }, { timezone: CRON_TIMEZONE });
 
   // Weekly digest every Monday at 9 AM
   cron.schedule('0 9 * * 1', async () => {
@@ -108,7 +112,7 @@ if (process.env.NODE_ENV !== 'test') {
     } catch (err) {
       console.error('[CRON] Weekly digest failed:', err.message);
     }
-  }, { timezone: 'Asia/Kolkata' });
+  }, { timezone: CRON_TIMEZONE });
 
   console.log(`\n⏰ Cron jobs scheduled:`);
   console.log(`   Hourly Chaser: ${CRON_SCHEDULE}`);
@@ -117,7 +121,7 @@ if (process.env.NODE_ENV !== 'test') {
 
 // ─── Start Server ─────────────────────────────────────────────────────────────
 app.listen(PORT, async () => {
-  console.log(`\n🚀 Chaser Agent API running on http://localhost:${PORT}`);
+  console.log(`\n🚀 Automatic Chaser Agent API running on http://localhost:${PORT}`);
   console.log(`📋 Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`\n📡 Available endpoints:`);
   console.log(`   GET  /api/health`);

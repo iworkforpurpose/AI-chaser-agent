@@ -1,7 +1,7 @@
 {
   "name": "chaser-agent-backend",
   "version": "1.0.0",
-  "description": "Chaser Agent API - Automated deadline chasing system",
+  "description": "Automatic Chaser Agent API - Automated deadline chasing system",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

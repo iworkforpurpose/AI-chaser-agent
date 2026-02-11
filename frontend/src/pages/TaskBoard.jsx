@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { taskApi, projectApi, userApi } from '../api';
+import { taskApi, userApi } from '../api';
 import toast from 'react-hot-toast';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -15,6 +15,23 @@ const COLUMNS = [
 ];
 
 const PRIORITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
+const scalar = (value) => (Array.isArray(value) ? value[0] : value);
+
+const normalizeTask = (task = {}) => ({
+  ...task,
+  assignee_id: String(scalar(task.assignee_id) || ''),
+  status: scalar(task.status),
+  priority: scalar(task.priority),
+  assignee_email: String(scalar(task.assignee_email) || '').trim().toLowerCase(),
+  chaser_enabled: scalar(task.chaser_enabled) === true,
+});
+
+const normalizeUser = (user = {}) => ({
+  ...user,
+  id: String(scalar(user.id) || ''),
+  email: String(scalar(user.email) || '').trim().toLowerCase(),
+  name: scalar(user.name) || '',
+});
 
 export default function TaskBoard() {
   const qc = useQueryClient();
@@ -31,7 +48,6 @@ export default function TaskBoard() {
   });
 
   const { data: usersData  } = useQuery({ queryKey: ['users'],    queryFn: () => userApi.list() });
-  const { data: projectsData } = useQuery({ queryKey: ['projects'], queryFn: () => projectApi.list() });
 
   const bulkChase = useMutation({
     mutationFn: () => taskApi.bulkChase(bulkSelected, 'bulk_trigger'),
@@ -39,8 +55,20 @@ export default function TaskBoard() {
     onError: (e) => toast.error(e),
   });
 
-  let tasks = tasksData?.data || [];
-  if (filterAssignee) tasks = tasks.filter(t => t.assignee_email === filterAssignee);
+  const users = (usersData?.data || []).map(normalizeUser).filter(u => u.id || u.email);
+  const memberOptions = Array.from(
+    new Map(users.map(u => [(u.id || u.email), u])).values()
+  );
+
+  const allTasks = (tasksData?.data || []).map(normalizeTask);
+  let tasks = allTasks;
+  if (filterAssignee) {
+    const selectedUser = users.find(u => (u.id || u.email) === filterAssignee);
+    tasks = tasks.filter(t =>
+      t.assignee_id === filterAssignee ||
+      (selectedUser?.email && t.assignee_email === selectedUser.email)
+    );
+  }
   if (filterPriority) tasks = tasks.filter(t => t.priority === filterPriority);
 
   const byStatus = {};
@@ -53,9 +81,6 @@ export default function TaskBoard() {
   Object.values(byStatus).forEach(arr =>
     arr.sort((a, b) => (PRIORITY_ORDER[a.priority] ?? 4) - (PRIORITY_ORDER[b.priority] ?? 4))
   );
-
-  const users = usersData?.data || [];
-  const projects = projectsData?.data || [];
 
   return (
     <div>
@@ -73,7 +98,7 @@ export default function TaskBoard() {
           <select value={filterAssignee} onChange={e => setFilterAssignee(e.target.value)}
             style={{ width: 'auto', padding: '7px 12px', fontSize: '13px' }}>
             <option value="">All Members</option>
-            {users.map(u => <option key={u.id} value={u.email}>{u.name}</option>)}
+            {memberOptions.map(u => <option key={u.id || u.email} value={u.id || u.email}>{u.name}</option>)}
           </select>
           <select value={filterPriority} onChange={e => setFilterPriority(e.target.value)}
             style={{ width: 'auto', padding: '7px 12px', fontSize: '13px' }}>
@@ -118,7 +143,6 @@ export default function TaskBoard() {
       {showCreate && (
         <CreateTaskModal
           users={users}
-          projects={projects}
           onClose={() => setShowCreate(false)}
           onCreated={() => { setShowCreate(false); qc.invalidateQueries(['tasks']); }}
         />
@@ -307,21 +331,21 @@ function TaskCard({ task, onClick, isSelected, onToggleBulk }) {
   );
 }
 
-function CreateTaskModal({ users, projects, onClose, onCreated }) {
+function CreateTaskModal({ users, onClose, onCreated }) {
   const [form, setForm] = useState({
     title: '', description: '', assignee_email: '',
     due_date: '', priority: 'medium', status: 'todo',
-    project_id: '', chaser_enabled: true,
+    chaser_enabled: true,
   });
 
   const set = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
-  const user = users.find(u => u.email === form.assignee_email);
+  const user = users.find(u => u.email === (form.assignee_email || '').toLowerCase());
 
   const create = useMutation({
     mutationFn: () => taskApi.create({
       ...form,
+      assignee_id: user?.id || '',
       assignee_name: user?.name || '',
-      reporter_email: 'arjun@acme.com',
     }),
     onSuccess: () => { toast.success('Task created!'); onCreated(); },
     onError: (e) => toast.error(String(e)),
@@ -345,16 +369,9 @@ function CreateTaskModal({ users, projects, onClose, onCreated }) {
         <div className="form-row">
           <div className="form-group">
             <label>Assignee *</label>
-            <select value={form.assignee_email} onChange={e => set('assignee_email', e.target.value)}>
+            <select value={form.assignee_email} onChange={e => set('assignee_email', e.target.value.toLowerCase())}>
               <option value="">Select person</option>
               {users.map(u => <option key={u.id} value={u.email}>{u.name}</option>)}
-            </select>
-          </div>
-          <div className="form-group">
-            <label>Project</label>
-            <select value={form.project_id} onChange={e => set('project_id', e.target.value)}>
-              <option value="">No project</option>
-              {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </div>
         </div>
@@ -382,7 +399,7 @@ function CreateTaskModal({ users, projects, onClose, onCreated }) {
 
         <div className="modal-footer">
           <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={() => create.mutate()} disabled={create.isPending || !form.title || !form.due_date}>
+          <button className="btn btn-primary" onClick={() => create.mutate()} disabled={create.isPending || !form.title || !form.due_date || !form.assignee_email}>
             {create.isPending ? 'Creating...' : 'Create Task'}
           </button>
         </div>

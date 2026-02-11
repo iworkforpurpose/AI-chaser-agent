@@ -8,12 +8,31 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 dayjs.extend(relativeTime);
 
 const TRIGGER_LABELS = {
-  auto_deadline: '⏰ Deadline Alert',
-  auto_overdue:  '🔴 Overdue Chase',
-  manual:        '👆 Manual Chase',
-  acknowledgment:'✅ Acknowledged',
-  escalation:    '🚨 Escalated',
+  deadline_proximity: '⏰ Deadline Alert',
+  overdue_escalation: '🔴 Overdue Chase',
+  manual: '👆 Manual Chase',
+  auto_ack: '✅ Acknowledged',
 };
+
+function getNextScanLabel(cronSchedule) {
+  if (!cronSchedule) return 'Unknown';
+
+  const now = dayjs();
+  if (cronSchedule.trim() === '0 * * * *') {
+    return now.add(1, 'hour').startOf('hour').fromNow();
+  }
+
+  const everyMinutesMatch = cronSchedule.trim().match(/^\*\/(\d+)\s+\*\s+\*\s+\*\s+\*$/);
+  if (everyMinutesMatch) {
+    const interval = Number(everyMinutesMatch[1]);
+    if (!Number.isFinite(interval) || interval <= 0) return 'Unknown';
+    const minute = now.minute();
+    const delta = interval - (minute % interval) || interval;
+    return now.add(delta, 'minute').startOf('minute').fromNow();
+  }
+
+  return 'Unknown';
+}
 
 function StatCard({ value, label, accent, delta, deltaColor }) {
   return (
@@ -57,6 +76,18 @@ export default function Dashboard() {
     queryFn: () => taskApi.overdue(),
   });
 
+  const { data: dueSoonData } = useQuery({
+    queryKey: ['due-soon-dashboard'],
+    queryFn: () => taskApi.dueSoon(24),
+    refetchInterval: 60000,
+  });
+
+  const { data: healthData, isLoading: healthLoading } = useQuery({
+    queryKey: ['health'],
+    queryFn: () => chaserApi.health(),
+    refetchInterval: 60000,
+  });
+
   const runChaser = useMutation({
     mutationFn: () => chaserApi.runNow(),
     onSuccess: (data) => {
@@ -69,23 +100,30 @@ export default function Dashboard() {
   const stats = statsData?.data || {};
   const logs  = logsData?.data  || [];
   const overdueTasks = overdueData?.data || [];
-  const upcomingChases = stats.upcomingChases || Math.max(1, (overdueTasks?.length || 0));
-  const nextActionEta = stats.nextActionEta || '3h';
-  const engineStatus = stats.engineStatus || 'Active';
-  const nextScan = stats.nextScan || 'in 15m';
+  const dueSoonTasks = dueSoonData?.data || [];
+  const upcomingChases = dueSoonData?.count ?? dueSoonTasks.length;
+  const earliestDueTask = dueSoonTasks.reduce((earliest, task) => {
+    if (!task?.due_date) return earliest;
+    if (!earliest) return task;
+    return dayjs(task.due_date).isBefore(dayjs(earliest.due_date)) ? task : earliest;
+  }, null);
+  const nextActionEta = earliestDueTask?.due_date ? dayjs(earliestDueTask.due_date).fromNow() : 'Unknown';
+  const engineStatus = healthLoading ? 'Checking' : (healthData?.db?.ok ? 'Active' : 'Degraded');
+  const nextScan = getNextScanLabel(healthData?.chaser?.cron_schedule);
+  const engineStatusPill = engineStatus.toLowerCase();
 
   return (
     <div>
       <div className="page-header">
         <div className="page-hero">
           <div>
-            <div className="eyebrow">AI operations · Mission control</div>
+            <div className="eyebrow">Automatic operations · Mission control</div>
             <div className="page-title">Chaser Command</div>
             <div className="page-subtitle">
-              {dayjs().format('dddd, MMMM D YYYY')} · AI agent monitoring handoffs and nudges in real time
+              {dayjs().format('dddd, MMMM D YYYY')} · Automatic Chaser Agent monitoring handoffs and nudges in real time
             </div>
             <div className="hero-meta">
-              <span className="pill pill-live"><span className="live-dot" />AI status · active</span>
+              <span className="pill pill-live"><span className="live-dot" />Automatic status · {engineStatusPill}</span>
               <span className="pill pill-muted">{stats.totalTasks || 0} tasks under watch</span>
             </div>
           </div>
@@ -159,10 +197,10 @@ export default function Dashboard() {
           <div className="ops-card ops-active">
             <div className="ops-row">
               <div className="ops-label">Active Tasks</div>
-              <div className="ops-pill">AI watch</div>
+              <div className="ops-pill">Auto watch</div>
             </div>
             <div className="ops-value">{stats.totalTasks || 0}</div>
-            <div className="ops-sub">Currently under AI watch</div>
+            <div className="ops-sub">Currently under automatic watch</div>
           </div>
 
           <div className="ops-card ops-engine">
@@ -177,7 +215,9 @@ export default function Dashboard() {
           <div className="ops-card ops-next">
             <div className="ops-label">Next Action</div>
             <div className="ops-value sm">{upcomingChases} tasks</div>
-            <div className="ops-sub">will be chased in {nextActionEta}</div>
+            <div className="ops-sub">
+              {nextActionEta === 'Unknown' ? 'No due-soon tasks in the current window' : `Earliest due ${nextActionEta}`}
+            </div>
           </div>
         </div>
 
@@ -272,7 +312,7 @@ function LogItem({ log, isLast }) {
       />
       <div className="log-body" style={{ paddingBottom: isLast ? 0 : 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
-          <div className="log-title">{TRIGGER_LABELS[log.trigger_type] || log.trigger_type}</div>
+          <div className="log-title">{TRIGGER_LABELS[log.type] || log.type}</div>
           <div className="log-meta">{dayjs(log.sent_at).fromNow()}</div>
         </div>
         <div className="log-sub">{log.task_title}</div>

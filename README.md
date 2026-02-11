@@ -1,4 +1,4 @@
-# ⚡ Chaser Agent
+# ⚡ Automatic Chaser Agent
 > Automated deadline-chasing system powered by Express.js + Boltic + React
 
 An intelligent program manager that never sleeps — automatically sends personalized reminders, escalations, and acknowledgments so your team never misses a deadline.
