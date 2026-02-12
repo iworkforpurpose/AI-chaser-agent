@@ -18,13 +18,33 @@ class BolticWorkflowService {
     });
   }
 
+  sanitizeWebhookUrl(webhookUrl) {
+    try {
+      const parsed = new URL(webhookUrl);
+      const last = parsed.pathname.split('/').filter(Boolean).pop() || '';
+      const tail = last ? `${last.slice(0, 3)}***${last.slice(-3)}` : '';
+      return `${parsed.origin}${parsed.pathname.replace(last, tail)}`;
+    } catch (_) {
+      return 'invalid-url';
+    }
+  }
+
+  getAppBaseHost() {
+    try {
+      return process.env.APP_BASE_URL ? new URL(process.env.APP_BASE_URL).host : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /**
    * Trigger a Boltic workflow by its webhook URL
    * @param {string} webhookUrl - The webhook URL from Boltic workflow settings
    * @param {object} payload - Data to pass to the workflow
    */
   async triggerWorkflow(webhookUrl, payload) {
-    if (!webhookUrl) {
+    const normalizedWebhookUrl = String(webhookUrl || '').trim();
+    if (!normalizedWebhookUrl) {
       console.warn('[BolticWorkflow] No webhook URL configured — skipping workflow trigger');
       return {
         success: false,
@@ -35,13 +55,52 @@ class BolticWorkflowService {
       };
     }
 
+    let webhookHost = null;
     try {
-      const res = await axios.post(webhookUrl, {
+      webhookHost = new URL(normalizedWebhookUrl).host;
+    } catch (_) {
+      console.error(`[BolticWorkflow] Invalid webhook URL configured: ${normalizedWebhookUrl}`);
+      return {
+        success: false,
+        skipped: true,
+        reason: 'invalid_webhook_url',
+        error: 'Workflow webhook URL is invalid',
+        code: 'invalid_webhook_url',
+      };
+    }
+
+    const appBaseHost = this.getAppBaseHost();
+    if (appBaseHost && webhookHost === appBaseHost) {
+      console.error(`[BolticWorkflow] Webhook target points to this backend (${webhookHost}); expected a Boltic webhook URL`);
+      return {
+        success: false,
+        skipped: true,
+        reason: 'webhook_points_to_backend',
+        error: 'Webhook URL points to backend APP_BASE_URL, not Boltic workflow',
+        code: 'webhook_points_to_backend',
+      };
+    }
+
+    try {
+      const redactedUrl = this.sanitizeWebhookUrl(normalizedWebhookUrl);
+      console.log(`[BolticWorkflow] Triggering webhook ${redactedUrl}`);
+
+      const res = await axios.post(normalizedWebhookUrl, {
         ...payload,
         triggered_at: new Date().toISOString(),
         source: 'chaser-agent-backend',
       });
-      console.log(`[BolticWorkflow] ✅ Workflow triggered successfully`);
+
+      if (typeof res.data === 'string' && /<!doctype|<html/i.test(res.data)) {
+        console.error('[BolticWorkflow] Unexpected HTML response from webhook target');
+        return {
+          success: false,
+          error: 'Webhook responded with HTML; URL likely not a Boltic workflow webhook',
+          code: 'unexpected_webhook_response',
+        };
+      }
+
+      console.log(`[BolticWorkflow] ✅ Workflow trigger accepted (${res.status})`);
       return { success: true, data: res.data };
     } catch (err) {
       console.error(`[BolticWorkflow] ❌ Workflow trigger failed:`, err.response?.data || err.message);
