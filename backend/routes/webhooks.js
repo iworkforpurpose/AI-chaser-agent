@@ -68,7 +68,7 @@ router.post('/boltic/task-updated', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
+// Note: we rely on Boltic's monitoring for task updates, but if desired we could also add a generic /task-updated webhook that Boltic workflows can call from any step to trigger an immediate scan (e.g. after a manual chase or snooze action).
 // ─── POST /api/webhooks/boltic/cron-trigger ──────────────────────────────
 // Boltic's scheduled workflow pings this to run the chaser scan
 router.post('/boltic/cron-trigger', async (req, res) => {
