@@ -18,6 +18,78 @@ class BolticWorkflowService {
     });
   }
 
+  toHumanLabel(value) {
+    return String(value || '')
+      .replace(/_/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+  }
+
+  formatDueDate(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value || '');
+    const timezone = process.env.EMAIL_TIMEZONE || 'Asia/Kolkata';
+    return new Intl.DateTimeFormat('en-IN', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+      timeZoneName: 'short',
+    }).format(date);
+  }
+
+  stripGreeting(message, assigneeName) {
+    const raw = String(message || '').trim();
+    const safeName = String(assigneeName || '').trim();
+    if (!raw || !safeName) return raw;
+
+    const escapedName = safeName
+      .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      .replace(/\s+/g, '\\s+');
+
+    return raw.replace(new RegExp(`^hi\\s+${escapedName}\\s*[!,.\\-:]*\\s*`, 'i'), '').trim();
+  }
+
+  buildManualChaserEmailContent(data) {
+    const assigneeName = String(data.assigneeName || '').trim() || 'there';
+    const taskTitle = String(data.taskTitle || '').trim() || 'Untitled Task';
+    const dueDateHuman = this.formatDueDate(data.dueDate);
+    const statusHuman = this.toHumanLabel(data.status) || 'Todo';
+    const priorityHuman = this.toHumanLabel(data.priority) || 'Medium';
+    const messagePlain = String(data.message || '').trim();
+    const messageClean = this.stripGreeting(messagePlain, assigneeName);
+    const openTaskUrl = `${process.env.FRONTEND_URL}/tasks/${data.taskId}`;
+    const subjectPrefix = data.isEscalation ? 'Escalation' : 'Action Required';
+    const subject = `[${subjectPrefix}] ${taskTitle}`;
+
+    const body = [
+      `Hi ${assigneeName},`,
+      '',
+      messageClean || messagePlain,
+      '',
+      `Task: ${taskTitle}`,
+      `Status: ${statusHuman}`,
+      `Priority: ${priorityHuman}`,
+      `Due: ${dueDateHuman}`,
+      '',
+      `Open task: ${openTaskUrl}`,
+    ].join('\n');
+
+    return {
+      subject,
+      body,
+      messageClean,
+      dueDateHuman,
+      statusHuman,
+      priorityHuman,
+      openTaskUrl,
+    };
+  }
+
   sanitizeWebhookUrl(webhookUrl) {
     try {
       const parsed = new URL(webhookUrl);
@@ -128,6 +200,7 @@ class BolticWorkflowService {
    */
   async triggerManualChaser(data) {
     const webhookUrl = process.env.BOLTIC_WEBHOOK_MANUAL_CHASER;
+    const email = this.buildManualChaserEmailContent(data);
     
     return this.triggerWorkflow(webhookUrl, {
       event: 'manual_chaser',
@@ -136,17 +209,24 @@ class BolticWorkflowService {
       assignee_email: data.assigneeEmail,
       assignee_name: data.assigneeName,
       due_date: data.dueDate,
+      due_date_human: email.dueDateHuman,
       priority: data.priority,
+      priority_human: email.priorityHuman,
       status: data.status,
+      status_human: email.statusHuman,
       message: data.message,
+      message_clean: email.messageClean,
       channel: data.channel || 'email',
       chaser_count: data.chaserCount,
       is_escalation: data.isEscalation || false,
       escalation_email: data.escalationEmail,
       trigger_type: data.triggerType,
-      snooze_link: `${process.env.APP_BASE_URL}/api/tasks/${data.taskId}/snooze?hours=4`,
-      ack_link: `${process.env.APP_BASE_URL}/api/tasks/${data.taskId}/acknowledge?token=${data.ackToken || ''}`,
-      task_link: `${process.env.FRONTEND_URL}/tasks/${data.taskId}`,
+      email_subject: email.subject,
+      email_body: email.body,
+      // Links in emails are clicked via GET, so they must target webhook GET handlers.
+      snooze_link: `${process.env.APP_BASE_URL}/api/webhooks/snooze?task_id=${data.taskId}&hours=4`,
+      ack_link: `${process.env.APP_BASE_URL}/api/webhooks/acknowledge?task_id=${data.taskId}&token=${data.ackToken || ''}`,
+      task_link: email.openTaskUrl,
       ack_token: data.ackToken,
     });
   }

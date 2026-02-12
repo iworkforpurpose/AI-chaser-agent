@@ -39,8 +39,8 @@
           "condition": "{{trigger.channel == 'email' || trigger.channel == 'all'}}",
           "config": {
             "to": "{{trigger.assignee_email}}",
-            "subject": "[Action Required] {{trigger.task_title}}",
-            "body": "{{trigger.message}}\n\n---\n🔗 View Task: {{trigger.task_link}}\n💤 Snooze (4h): {{trigger.snooze_link}}\n✅ Mark Done: {{trigger.task_link}}"
+            "subject": "{{trigger.email_subject}}",
+            "body": "{{trigger.email_body}}\n\nSnooze (4h): {{trigger.snooze_link}}\nMark Done: {{trigger.task_link}}"
           }
         },
         {

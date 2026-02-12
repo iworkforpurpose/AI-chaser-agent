@@ -107,7 +107,7 @@ router.post('/manual-chase', async (req, res) => {
   }
 });
 
-// ─── POST /api/webhooks/boltic/snooze ─────────────────────────────────────
+// ─── GET /api/webhooks/snooze ──────────────────────────────────────────────
 // Handles snooze links clicked from emails
 router.get('/snooze', async (req, res) => {
   try {
@@ -119,6 +119,36 @@ router.get('/snooze', async (req, res) => {
     </body></html>`);
   } catch (err) {
     res.status(500).send('Error snoozing task');
+  }
+});
+
+// ─── GET /api/webhooks/acknowledge ─────────────────────────────────────────
+// Handles acknowledge links clicked from emails
+router.get('/acknowledge', async (req, res) => {
+  try {
+    const { task_id, token, user_email = 'email_link' } = req.query;
+    if (!task_id) {
+      return res.status(400).send('Missing task_id');
+    }
+
+    const task = await db.findById('tasks', task_id);
+    if (!task) {
+      return res.status(404).send('Task not found');
+    }
+
+    const ackToken = scalar(task.ack_token);
+    if (ackToken && String(token || '') !== String(ackToken)) {
+      return res.status(403).send('Invalid or expired acknowledgment link');
+    }
+
+    await chaserEngine.acknowledgeTask(task_id, String(user_email));
+
+    res.send(`<html><body style="font-family:sans-serif;text-align:center;padding:40px">
+      <h2>✅ Acknowledged</h2>
+      <p>Thanks! This task has been marked as acknowledged.</p>
+    </body></html>`);
+  } catch (err) {
+    res.status(500).send('Error acknowledging task');
   }
 });
 
