@@ -30,6 +30,15 @@ app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({ origin: process.env.FRONTEND_URL || '*', credentials: true }));
 app.use(morgan('dev'));
 app.use(express.json({ limit: '2mb' }));
+// Normalize accidental double-slash request paths (e.g. //api/webhooks/snooze)
+app.use((req, _res, next) => {
+  const [pathPart, queryPart] = String(req.url || '').split('?');
+  const normalizedPath = pathPart.replace(/\/{2,}/g, '/');
+  if (normalizedPath !== pathPart) {
+    req.url = queryPart ? `${normalizedPath}?${queryPart}` : normalizedPath;
+  }
+  next();
+});
 
 // Rate limiting
 const apiLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
