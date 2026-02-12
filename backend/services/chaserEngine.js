@@ -12,6 +12,21 @@ const bolticWorkflow = require('./bolticWorkflow');
 const scalar = (value) => Array.isArray(value) ? value[0] : value;
 
 class ChaserEngine {
+  formatDueDate(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return String(value || '');
+    const timezone = process.env.EMAIL_TIMEZONE || 'Asia/Kolkata';
+    return new Intl.DateTimeFormat('en-IN', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+      timeZoneName: 'short',
+    }).format(date);
+  }
   
   /**
    * Main method — scans all tasks and fires appropriate chasers
@@ -391,7 +406,7 @@ class ChaserEngine {
    * Build personalized message from template
    */
   buildMessage(task, rule, context) {
-    const dueDate = dayjs(task.due_date);
+    const dueDateHuman = this.formatDueDate(task.due_date);
     const priority = scalar(task.priority) || '';
     const status = scalar(task.status) || '';
     const template = rule.message_template || 
@@ -400,7 +415,7 @@ class ChaserEngine {
     return template
       .replace(/{{assignee_name}}/g, task.assignee_name || 'Team')
       .replace(/{{task_title}}/g, task.title)
-      .replace(/{{due_date}}/g, dueDate.format('MMM D, YYYY'))
+      .replace(/{{due_date}}/g, dueDateHuman)
       .replace(/{{priority}}/g, priority)
       .replace(/{{status}}/g, status)
       .replace(/{{project_id}}/g, task.project_id || '')

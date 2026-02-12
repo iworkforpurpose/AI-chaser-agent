@@ -40,7 +40,7 @@
           "config": {
             "to": "{{trigger.assignee_email}}",
             "subject": "{{trigger.email_subject}}",
-            "body": "{{trigger.email_body}}\n\nSnooze (4h): {{trigger.snooze_link}}\nMark Done: {{trigger.task_link}}"
+            "body": "{{trigger.email_body_html}}<br><br><a href=\"{{trigger.snooze_link}}\">Snooze (4h)</a><br><a href=\"{{trigger.task_link}}\">Mark Done</a>"
           }
         },
         {

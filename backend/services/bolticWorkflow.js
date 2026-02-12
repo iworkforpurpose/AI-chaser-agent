@@ -18,6 +18,41 @@ class BolticWorkflowService {
     });
   }
 
+  normalizeBaseUrl(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    return raw.replace(/\/+$/, '');
+  }
+
+  joinUrl(base, path) {
+    const normalizedBase = this.normalizeBaseUrl(base);
+    const normalizedPath = String(path || '').replace(/^\/+/, '');
+    if (!normalizedBase) return normalizedPath ? `/${normalizedPath}` : '';
+    if (!normalizedPath) return normalizedBase;
+    return `${normalizedBase}/${normalizedPath}`;
+  }
+
+  buildWebhookLink(path, query = {}) {
+    const base = this.normalizeBaseUrl(process.env.APP_BASE_URL);
+    if (!base) return '';
+    const url = new URL(this.joinUrl(base, path));
+    Object.entries(query).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        url.searchParams.set(key, String(value));
+      }
+    });
+    return url.toString();
+  }
+
+  escapeHtml(value) {
+    return String(value || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   toHumanLabel(value) {
     return String(value || '')
       .replace(/_/g, ' ')
@@ -62,26 +97,41 @@ class BolticWorkflowService {
     const priorityHuman = this.toHumanLabel(data.priority) || 'Medium';
     const messagePlain = String(data.message || '').trim();
     const messageClean = this.stripGreeting(messagePlain, assigneeName);
-    const openTaskUrl = `${process.env.FRONTEND_URL}/tasks/${data.taskId}`;
+    const openTaskUrl = this.joinUrl(process.env.FRONTEND_URL, `/tasks/${data.taskId}`);
     const subjectPrefix = data.isEscalation ? 'Escalation' : 'Action Required';
     const subject = `[${subjectPrefix}] ${taskTitle}`;
+    const intro = messageClean || `A reminder about your task "${taskTitle}".`;
+    const openTaskLabel = openTaskUrl || 'Not configured';
 
     const body = [
       `Hi ${assigneeName},`,
       '',
-      messageClean || messagePlain,
+      intro,
       '',
-      `Task: ${taskTitle}`,
-      `Status: ${statusHuman}`,
-      `Priority: ${priorityHuman}`,
-      `Due: ${dueDateHuman}`,
+      'Task Details',
+      `- Task: ${taskTitle}`,
+      `- Status: ${statusHuman}`,
+      `- Priority: ${priorityHuman}`,
+      `- Due: ${dueDateHuman}`,
       '',
-      `Open task: ${openTaskUrl}`,
+      `Open Task: ${openTaskLabel}`,
     ].join('\n');
+
+    const bodyHtml = [
+      `<p>Hi ${this.escapeHtml(assigneeName)},</p>`,
+      `<p>${this.escapeHtml(intro)}</p>`,
+      '<p><strong>Task Details</strong><br>',
+      `- Task: ${this.escapeHtml(taskTitle)}<br>`,
+      `- Status: ${this.escapeHtml(statusHuman)}<br>`,
+      `- Priority: ${this.escapeHtml(priorityHuman)}<br>`,
+      `- Due: ${this.escapeHtml(dueDateHuman)}</p>`,
+      `<p><a href="${this.escapeHtml(openTaskUrl)}">Open Task</a></p>`,
+    ].join('');
 
     return {
       subject,
       body,
+      bodyHtml,
       messageClean,
       dueDateHuman,
       statusHuman,
@@ -223,9 +273,10 @@ class BolticWorkflowService {
       trigger_type: data.triggerType,
       email_subject: email.subject,
       email_body: email.body,
+      email_body_html: email.bodyHtml,
       // Links in emails are clicked via GET, so they must target webhook GET handlers.
-      snooze_link: `${process.env.APP_BASE_URL}/api/webhooks/snooze?task_id=${data.taskId}&hours=4`,
-      ack_link: `${process.env.APP_BASE_URL}/api/webhooks/acknowledge?task_id=${data.taskId}&token=${data.ackToken || ''}`,
+      snooze_link: this.buildWebhookLink('/api/webhooks/snooze', { task_id: data.taskId, hours: 4 }),
+      ack_link: this.buildWebhookLink('/api/webhooks/acknowledge', { task_id: data.taskId, token: data.ackToken || '' }),
       task_link: email.openTaskUrl,
       ack_token: data.ackToken,
     });
