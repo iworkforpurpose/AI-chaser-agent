@@ -217,7 +217,7 @@ export default function HeroScene() {
     // Smooth lerp loop — 3D objects glide to the target scroll position
     let raf;
     const smoothScroll = () => {
-      scrollRef.current += (targetRef.current - scrollRef.current) * 0.03;
+      scrollRef.current += (targetRef.current - scrollRef.current) * 0.008;
       raf = requestAnimationFrame(smoothScroll);
     };
     smoothScroll();
