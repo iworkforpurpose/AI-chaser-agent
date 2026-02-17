@@ -6,7 +6,10 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db/bolticClient');
 const chaserEngine = require('../services/chaserEngine');
+const { authMiddleware } = require('../services/authMiddleware');
 const dayjs = require('dayjs');
+
+router.use(authMiddleware);
 const scalar = (value) => (Array.isArray(value) ? value[0] : value);
 const normalizeStatus = (value) => String(scalar(value) || '').toLowerCase();
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -58,23 +61,40 @@ const parseDateParam = (value, boundary) => {
 router.get('/', async (req, res) => {
   try {
     const { status, priority, assignee_email, overdue, due_today } = req.query;
-    const filters = [];
     const now = dayjs();
 
-    if (assignee_email) filters.push({ field: 'assignee_email', operator: 'eq', value: assignee_email });
-
-    if (overdue === 'true') {
-      filters.push({ field: 'due_date', operator: 'lt',  value: now.toISOString() });
+    // Data Isolation: regular users only see their own tasks (assigned to them OR created by them)
+    // Managers/Admins see all.
+    let tasks = [];
+    if (req.user.role === 'user') {
+      // Fetch tasks assigned to the user
+      const assignedTasks = await db.find('tasks', {
+        filters: [{ field: 'assignee_email', operator: 'eq', value: req.user.email }],
+        limit: 200
+      });
+      // Fetch tasks created by the user
+      const createdTasks = await db.find('tasks', {
+        filters: [{ field: 'created_by', operator: 'eq', value: req.user.email }],
+        limit: 200
+      });
+      
+      // Merge and deduplicate
+      const taskMap = new Map();
+      assignedTasks.forEach(t => taskMap.set(t.id, t));
+      createdTasks.forEach(t => taskMap.set(t.id, t));
+      tasks = Array.from(taskMap.values());
+    } else {
+      // Manager/Admin can see all, with optional assignee filter
+      const filters = [];
+      if (assignee_email) {
+        filters.push({ field: 'assignee_email', operator: 'eq', value: assignee_email });
+      }
+      tasks = await db.find('tasks', { filters, sort: 'due_date', limit: 200 });
     }
 
-    if (due_today === 'true') {
-      filters.push({ field: 'due_date', operator: 'gte', value: now.startOf('day').toISOString() });
-      filters.push({ field: 'due_date', operator: 'lte', value: now.endOf('day').toISOString() });
-    }
+    tasks = tasks.map(normalizeTask);
 
-    let tasks = (await db.find('tasks', { filters, sort: 'due_date', limit: 200 }))
-      .map(normalizeTask);
-
+    // Apply common filters
     if (status) {
       tasks = tasks.filter((task) => task.status === status);
     }
@@ -102,7 +122,8 @@ router.get('/', async (req, res) => {
 // ─── GET /api/tasks/stats ─────────────────────────────────────────────────
 router.get('/stats', async (req, res) => {
   try {
-    const stats = await chaserEngine.getStats();
+    const emailFilter = req.user.role === 'user' ? req.user.email : null;
+    const stats = await chaserEngine.getStats(emailFilter);
     res.json({ success: true, data: stats });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -117,14 +138,36 @@ router.get('/due-soon', async (req, res) => {
     const now = dayjs();
     const cutoff = now.add(hours, 'hour');
 
-    const tasks = (await db.find('tasks', {
-      filters: [
+    let tasks = [];
+    if (req.user.role === 'user') {
+       // Regular users: tasks due soon AND (assigned OR created)
+       const filtersBase = [
+         { field: 'chaser_enabled', operator: 'eq',  value: true },
+         { field: 'due_date',       operator: 'gte', value: now.toISOString() },
+         { field: 'due_date',       operator: 'lte', value: cutoff.toISOString() },
+       ];
+       
+       const assigned = await db.find('tasks', { 
+         filters: [...filtersBase, { field: 'assignee_email', operator: 'eq', value: req.user.email }]
+       });
+       const created = await db.find('tasks', {
+         filters: [...filtersBase, { field: 'created_by', operator: 'eq', value: req.user.email }]
+       });
+       
+       const taskMap = new Map();
+       assigned.forEach(t => taskMap.set(t.id, t));
+       created.forEach(t => taskMap.set(t.id, t));
+       tasks = Array.from(taskMap.values());
+    } else {
+      const filters = [
         { field: 'chaser_enabled', operator: 'eq',  value: true },
         { field: 'due_date',       operator: 'gte', value: now.toISOString() },
         { field: 'due_date',       operator: 'lte', value: cutoff.toISOString() },
-      ],
-    }))
-      .map(normalizeTask)
+      ];
+      tasks = await db.find('tasks', { filters });
+    }
+
+    tasks = tasks.map(normalizeTask)
       .filter((task) => !isClosedStatus(task.status));
 
     res.json({ success: true, data: tasks, count: tasks.length });
@@ -136,13 +179,27 @@ router.get('/due-soon', async (req, res) => {
 // ─── GET /api/tasks/overdue ───────────────────────────────────────────────
 router.get('/overdue', async (req, res) => {
   try {
-    const tasks = (await db.find('tasks', {
-      filters: [
-        { field: 'due_date',       operator: 'lt',  value: dayjs().toISOString() },
-      ],
-      sort: 'due_date',
-    }))
-      .map(normalizeTask)
+    let tasks = [];
+    const filtersBase = [
+      { field: 'due_date',       operator: 'lt',  value: dayjs().toISOString() },
+    ];
+
+    if (req.user.role === 'user') {
+      const assigned = await db.find('tasks', {
+        filters: [...filtersBase, { field: 'assignee_email', operator: 'eq', value: req.user.email }]
+      });
+      const created = await db.find('tasks', {
+        filters: [...filtersBase, { field: 'created_by', operator: 'eq', value: req.user.email }]
+      });
+      const taskMap = new Map();
+      assigned.forEach(t => taskMap.set(t.id, t));
+      created.forEach(t => taskMap.set(t.id, t));
+      tasks = Array.from(taskMap.values());
+    } else {
+      tasks = await db.find('tasks', { filters: filtersBase, sort: 'due_date' });
+    }
+
+    tasks = tasks.map(normalizeTask)
       .filter((task) => !isClosedStatus(task.status));
     res.json({ success: true, data: tasks, count: tasks.length });
   } catch (err) {
@@ -154,23 +211,9 @@ router.get('/overdue', async (req, res) => {
 // Used by Boltic's Monday cron workflow
 router.get('/weekly-digest', async (req, res) => {
   try {
-    const tasks = (await db.find('tasks', {
-      limit: 500,
-    }))
-      .map(normalizeTask)
-      .filter((task) => task.status !== 'done');
-
-    // Group by assignee
-    const byAssignee = {};
-    for (const task of tasks) {
-      const key = task.assignee_email;
-      if (!byAssignee[key]) {
-        byAssignee[key] = { email: key, name: task.assignee_name, tasks: [] };
-      }
-      byAssignee[key].tasks.push(task);
-    }
-
-    res.json({ success: true, data: Object.values(byAssignee) });
+    const userEmail = req.user.role === 'user' ? req.user.email : null;
+    const data = await chaserEngine.getWeeklyDigestData(userEmail);
+    res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -221,10 +264,18 @@ router.get('/completed', async (req, res) => {
     const completedTasks = rawTasks
       .map(normalizeTask)
       .filter((task) => task.status === 'done' && task.completed_at && dayjs(task.completed_at).isValid())
-      .filter((task) => (
-        !normalizedAssigneeEmail
-        || String(task.assignee_email || '').trim().toLowerCase() === normalizedAssigneeEmail
-      ))
+      .filter((task) => {
+        // Data Isolation: users see completed tasks assigned TO them OR created BY them
+        if (req.user.role === 'user') {
+          const isAssignee = String(task.assignee_email || '').trim().toLowerCase() === req.user.email.toLowerCase();
+          const isCreator = String(task.created_by || '').trim().toLowerCase() === req.user.email.toLowerCase();
+          return isAssignee || isCreator;
+        }
+        
+        // Managers can filter by assignee_email
+        if (!normalizedAssigneeEmail) return true;
+        return String(task.assignee_email || '').trim().toLowerCase() === normalizedAssigneeEmail;
+      })
       .filter((task) => !fromIso || !dayjs(task.completed_at).isBefore(dayjs(fromIso)))
       .filter((task) => !toIso || !dayjs(task.completed_at).isAfter(dayjs(toIso)))
       .sort((a, b) => dayjs(b.completed_at).valueOf() - dayjs(a.completed_at).valueOf());
@@ -241,6 +292,20 @@ router.get('/:id', async (req, res) => {
   try {
     const task = await db.findById('tasks', req.params.id);
     if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+    
+    // Data Isolation Check
+    if (req.user.role === 'user') {
+      const taskEmail = Array.isArray(task.assignee_email) ? task.assignee_email[0] : task.assignee_email;
+      const creatorEmail = Array.isArray(task.created_by) ? task.created_by[0] : task.created_by;
+      
+      const isAssignee = String(taskEmail || '').trim().toLowerCase() === req.user.email.toLowerCase();
+      const isCreator = String(creatorEmail || '').trim().toLowerCase() === req.user.email.toLowerCase();
+      
+      if (!isAssignee && !isCreator) {
+        return res.status(403).json({ success: false, error: 'Forbidden: Access to this task is restricted' });
+      }
+    }
+
     res.json({ success: true, data: task });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -251,6 +316,10 @@ router.get('/:id', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const payload = pickTaskFields(req.body);
+    
+    // Track who created the task
+    payload.created_by = req.user.email;
+
     payload.times_chased = payload.times_chased ?? 0;
     payload.times_escalated = payload.times_escalated ?? 0;
     if (normalizeStatus(payload.status) === 'done') {
@@ -267,6 +336,22 @@ router.post('/', async (req, res) => {
 // ─── PATCH /api/tasks/:id ─────────────────────────────────────────────────
 router.patch('/:id', async (req, res) => {
   try {
+    const task = await db.findById('tasks', req.params.id);
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+
+    // Data Isolation: regular users only modify their own tasks (assigned OR created)
+    if (req.user.role === 'user') {
+      const taskEmail = Array.isArray(task.assignee_email) ? task.assignee_email[0] : task.assignee_email;
+      const creatorEmail = Array.isArray(task.created_by) ? task.created_by[0] : task.created_by;
+      
+      const isAssignee = String(taskEmail || '').trim().toLowerCase() === req.user.email.toLowerCase();
+      const isCreator = String(creatorEmail || '').trim().toLowerCase() === req.user.email.toLowerCase();
+
+      if (!isAssignee && !isCreator) {
+        return res.status(403).json({ success: false, error: 'Forbidden: You can only update your own tasks' });
+      }
+    }
+
     const updatedData = pickTaskFields(req.body);
 
     if (Object.keys(updatedData).length === 0) {
@@ -275,7 +360,6 @@ router.patch('/:id', async (req, res) => {
 
     // Status transitions own completed_at lifecycle on the server.
     if (Object.prototype.hasOwnProperty.call(updatedData, 'status')) {
-      const task = await db.findById('tasks', req.params.id);
       const prevStatus = normalizeStatus(task?.status);
       const nextStatus = normalizeStatus(updatedData.status);
       updatedData.status = nextStatus;
@@ -289,8 +373,8 @@ router.patch('/:id', async (req, res) => {
       }
     }
 
-    const task = await db.update('tasks', req.params.id, updatedData);
-    res.json({ success: true, data: task });
+    const updatedTask = await db.update('tasks', req.params.id, updatedData);
+    res.json({ success: true, data: updatedTask });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -299,6 +383,22 @@ router.patch('/:id', async (req, res) => {
 // ─── DELETE /api/tasks/:id ────────────────────────────────────────────────
 router.delete('/:id', async (req, res) => {
   try {
+    const task = await db.findById('tasks', req.params.id);
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+
+    // Data Isolation: regular users only delete their own tasks (assigned OR created)
+    if (req.user.role === 'user') {
+      const taskEmail = Array.isArray(task.assignee_email) ? task.assignee_email[0] : task.assignee_email;
+      const creatorEmail = Array.isArray(task.created_by) ? task.created_by[0] : task.created_by;
+      
+      const isAssignee = String(taskEmail || '').trim().toLowerCase() === req.user.email.toLowerCase();
+      const isCreator = String(creatorEmail || '').trim().toLowerCase() === req.user.email.toLowerCase();
+
+      if (!isAssignee && !isCreator) {
+        return res.status(403).json({ success: false, error: 'Forbidden: You can only delete your own tasks' });
+      }
+    }
+
     await db.delete('tasks', req.params.id);
     res.json({ success: true, message: 'Task deleted' });
   } catch (err) {
@@ -310,9 +410,25 @@ router.delete('/:id', async (req, res) => {
 // Manual chase trigger from UI
 router.post('/:id/chase', async (req, res) => {
   try {
+    const task = await db.findById('tasks', req.params.id);
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+
+    // Data Isolation: regular users only chase their own tasks (assigned OR created)
+    if (req.user.role === 'user') {
+      const taskEmail = Array.isArray(task.assignee_email) ? task.assignee_email[0] : task.assignee_email;
+      const creatorEmail = Array.isArray(task.created_by) ? task.created_by[0] : task.created_by;
+      
+      const isAssignee = String(taskEmail || '').trim().toLowerCase() === req.user.email.toLowerCase();
+      const isCreator = String(creatorEmail || '').trim().toLowerCase() === req.user.email.toLowerCase();
+
+      if (!isAssignee && !isCreator) {
+        return res.status(403).json({ success: false, error: 'Forbidden: You can only chase your own tasks' });
+      }
+    }
+
     const result = await chaserEngine.manualChase(
       req.params.id,
-      req.body.triggered_by || 'manual_user'
+      req.body.triggered_by || req.user.email
     );
     res.json({ success: true, data: result });
   } catch (err) {
@@ -323,6 +439,22 @@ router.post('/:id/chase', async (req, res) => {
 // ─── POST /api/tasks/:id/snooze ───────────────────────────────────────────
 router.post('/:id/snooze', async (req, res) => {
   try {
+    const task = await db.findById('tasks', req.params.id);
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+
+    // Data Isolation: regular users only snooze their own tasks (assigned OR created)
+    if (req.user.role === 'user') {
+      const taskEmail = Array.isArray(task.assignee_email) ? task.assignee_email[0] : task.assignee_email;
+      const creatorEmail = Array.isArray(task.created_by) ? task.created_by[0] : task.created_by;
+      
+      const isAssignee = String(taskEmail || '').trim().toLowerCase() === req.user.email.toLowerCase();
+      const isCreator = String(creatorEmail || '').trim().toLowerCase() === req.user.email.toLowerCase();
+
+      if (!isAssignee && !isCreator) {
+        return res.status(403).json({ success: false, error: 'Forbidden: You can only snooze your own tasks' });
+      }
+    }
+
     const hours = parseInt(req.body.hours || req.query.hours) || 4;
     const result = await chaserEngine.snoozeTask(req.params.id, hours);
     res.json({ success: true, data: result, message: `Snoozed for ${hours} hours` });
@@ -334,7 +466,23 @@ router.post('/:id/snooze', async (req, res) => {
 // ─── POST /api/tasks/:id/acknowledge ─────────────────────────────────────
 router.post('/:id/acknowledge', async (req, res) => {
   try {
-    const result = await chaserEngine.acknowledgeTask(req.params.id, req.body.user_email);
+    const task = await db.findById('tasks', req.params.id);
+    if (!task) return res.status(404).json({ success: false, error: 'Task not found' });
+
+    // Data Isolation: regular users only acknowledge their own tasks (assigned OR created)
+    if (req.user.role === 'user') {
+      const taskEmail = Array.isArray(task.assignee_email) ? task.assignee_email[0] : task.assignee_email;
+      const creatorEmail = Array.isArray(task.created_by) ? task.created_by[0] : task.created_by;
+      
+      const isAssignee = String(taskEmail || '').trim().toLowerCase() === req.user.email.toLowerCase();
+      const isCreator = String(creatorEmail || '').trim().toLowerCase() === req.user.email.toLowerCase();
+
+      if (!isAssignee && !isCreator) {
+        return res.status(403).json({ success: false, error: 'Forbidden: You can only acknowledge your own tasks' });
+      }
+    }
+
+    const result = await chaserEngine.acknowledgeTask(req.params.id, req.body.user_email || req.user.email);
     res.json({ success: true, data: result });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

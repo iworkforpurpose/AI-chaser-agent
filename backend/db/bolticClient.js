@@ -203,8 +203,49 @@ class BolticDB {
       page,
       db_id: this.dbId,
     });
-    if (res?.error) throw new Error(res.error.meta?.join(', ') || res.error.message || 'Find failed');
-    return res.data || [];
+    
+    let data = res.data || [];
+
+    // Fallback: Boltic SDK sometimes ignores filters in certain environments.
+    // Manually apply basic filters to ensure data isolation and correct logic.
+    if (filters.length > 0 && data.length > 0) {
+      data = data.filter(item => {
+        return filters.every(f => {
+          let actualValue = item[f.field];
+          // Boltic often returns single-values as single-element arrays
+          if (Array.isArray(actualValue)) actualValue = actualValue[0];
+          
+          const expectedValue = f.value;
+          
+          if (actualValue === undefined || actualValue === null) {
+            // If we are checking for non-existence or something, but usually our fields should exist
+            return false;
+          }
+
+          if (f.operator === 'eq') {
+            return String(actualValue).toLowerCase() === String(expectedValue).toLowerCase();
+          }
+          if (f.operator === 'neq') {
+            return String(actualValue).toLowerCase() !== String(expectedValue).toLowerCase();
+          }
+          if (f.operator === 'in') {
+            const values = Array.isArray(expectedValue) ? expectedValue : [expectedValue];
+            return values.some(v => String(v).toLowerCase() === String(actualValue).toLowerCase());
+          }
+          if (f.operator === 'gt') return actualValue > expectedValue;
+          if (f.operator === 'gte') return actualValue >= expectedValue;
+          if (f.operator === 'lt') return actualValue < expectedValue;
+          if (f.operator === 'lte') return actualValue <= expectedValue;
+          if (f.operator === 'contains') {
+            return String(actualValue).toLowerCase().includes(String(expectedValue).toLowerCase());
+          }
+          
+          return true; 
+        });
+      });
+    }
+
+    return data;
   }
 
   /**

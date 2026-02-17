@@ -9,14 +9,16 @@ const cors = require('cors');
 const morgan = require('morgan');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const cookieParser = require('cookie-parser');
 const cron = require('node-cron');
 
+const authRoutes = require('./routes/auth');
 const taskRoutes = require('./routes/tasks');
 const chaserRulesRoutes = require('./routes/chaserRules');
-const webhookRoutes = require('./routes/webhooks');
-const { logsRouter } = require('./routes/webhooks');
+const apiRoutes = require('./routes/webhooks');
 const chaserEngine = require('./services/chaserEngine');
 const db = require('./db/bolticClient');
+const authLogger = require('./services/logger');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -30,6 +32,7 @@ app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({ origin: process.env.FRONTEND_URL || '*', credentials: true }));
 app.use(morgan('dev'));
 app.use(express.json({ limit: '2mb' }));
+app.use(cookieParser());
 // Normalize accidental double-slash request paths (e.g. //api/webhooks/snooze)
 app.use((req, _res, next) => {
   const [pathPart, queryPart] = String(req.url || '').split('?');
@@ -44,16 +47,18 @@ app.use((req, _res, next) => {
 const apiLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 200 });
 app.use('/api/', apiLimiter);
 
+const { authMiddleware, authorize } = require('./services/authMiddleware');
+
 // ─── Routes ──────────────────────────────────────────────────────────────────
+app.use('/api/auth',          authRoutes);
 app.use('/api/tasks',         taskRoutes);
 app.use('/api/chaser-rules',  chaserRulesRoutes);
-app.use('/api/webhooks',      webhookRoutes);
-app.use('/api/chaser-logs',   logsRouter);
+app.use('/api',               apiRoutes);
 
 // Optional: projects are not part of minimal schema; endpoint disabled for hackathon scope
 
 // Users endpoint
-app.get('/api/users', async (req, res) => {
+app.get('/api/users', authMiddleware, authorize(['manager', 'admin']), async (req, res) => {
   try {
     const users = await db.find('users');
     res.json({ success: true, data: users });
@@ -95,7 +100,13 @@ app.use((req, res) => {
 
 // ─── Error Handler ────────────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
-  console.error('[Server Error]', err.stack);
+  authLogger.error('Unhandled Server Error', { 
+    error: err.message, 
+    stack: err.stack,
+    path: req.path,
+    method: req.method,
+    ip: req.ip
+  });
   res.status(500).json({ success: false, error: err.message || 'Internal server error' });
 });
 
@@ -114,10 +125,9 @@ if (process.env.NODE_ENV !== 'test') {
   cron.schedule('0 9 * * 1', async () => {
     console.log('\n📬 [CRON] Sending weekly digest...');
     try {
-      const res = await fetch(`http://localhost:${PORT}/api/tasks/weekly-digest`);
-      const data = await res.json();
+      const digestData = await chaserEngine.getWeeklyDigestData();
       const bolticWorkflow = require('./services/bolticWorkflow');
-      await bolticWorkflow.triggerWeeklyDigest(data.data);
+      await bolticWorkflow.triggerWeeklyDigest(digestData);
     } catch (err) {
       console.error('[CRON] Weekly digest failed:', err.message);
     }

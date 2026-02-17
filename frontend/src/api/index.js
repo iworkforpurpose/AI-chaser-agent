@@ -6,15 +6,30 @@ import axios from 'axios';
 const api = axios.create({
   baseURL: '/api',
   headers: { 'Content-Type': 'application/json' },
+  withCredentials: true,
 });
 
 api.interceptors.response.use(
   (r) => r.data,
-  (err) => Promise.reject(err.response?.data?.error || err.message)
+  (err) => {
+    const path = window.location.pathname;
+    const publicPaths = ['/', '/login', '/register', '/landingpage'];
+    const isPublic = publicPaths.includes(path);
+
+    if (err.response?.status === 401 && !isPublic) {
+      window.location.href = '/login';
+    }
+    return Promise.reject(err.response?.data?.error || err.message);
+  }
 );
 
-export const currentUserEmail = import.meta.env.VITE_USER_EMAIL || 'vighurnama@gmail.com';
-export const currentUserName = 'Vighnesh Nama';
+// ─── Auth ─────────────────────────────────────────────────────────────────────
+export const authApi = {
+  login: (data) => api.post('/auth/login', data),
+  register: (data) => api.post('/auth/register', data),
+  logout: () => api.post('/auth/logout'),
+  me: () => api.get('/auth/me'),
+};
 
 // ─── Tasks ────────────────────────────────────────────────────────────────────
 export const taskApi = {
@@ -80,11 +95,10 @@ export const logApi = {
 };
 
 // ─── Notifications ────────────────────────────────────────────────────────────
-// TODO: Implement /api/notifications backend endpoint before uncommenting
-// export const notifApi = {
-//   list:    (email) => api.get('/notifications', { params: { user_email: email } }),
-//   markRead: (id)   => api.patch(`/notifications/${id}/read`),
-// };
+export const notifApi = {
+  list: (params) => api.get('/notifications', { params }),
+  markRead: (id) => api.patch(`/notifications/${id}/read`),
+};
 
 // ─── Chaser Engine ────────────────────────────────────────────────────────────
 export const chaserApi = {

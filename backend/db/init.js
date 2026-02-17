@@ -16,6 +16,7 @@ const TABLES = [
     fields: [
       { name: 'email', type: 'email', is_nullable: false, is_unique: true, is_indexed: true },
       { name: 'name', type: 'text', is_nullable: false },
+      { name: 'password_hash', type: 'text', is_nullable: true },
       { name: 'role', type: 'dropdown', selectable_items: ['user', 'manager', 'admin'], multiple_selections: false, is_nullable: false, default_value: 'user' },
       { name: 'timezone', type: 'text', is_nullable: true, default_value: 'UTC' },
       { name: 'active', type: 'checkbox', is_nullable: false, default_value: true },

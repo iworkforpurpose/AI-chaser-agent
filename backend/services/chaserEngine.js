@@ -429,13 +429,31 @@ class ChaserEngine {
   /**
    * Get chaser analytics/stats
    */
-  async getStats() {
+  async getStats(emailFilter = null) {
     const now = dayjs();
+    let tasks = [];
 
-    const [tasks, totalChaserLogs] = await Promise.all([
-      db.find('tasks', { limit: 2000 }),
-      db.count('chaser_logs'),
-    ]);
+    if (emailFilter) {
+      // Fetch tasks assigned TO the user
+      const assigned = await db.find('tasks', {
+        filters: [{ field: 'assignee_email', operator: 'eq', value: emailFilter }],
+        limit: 2000
+      });
+      // Fetch tasks created BY the user
+      const created = await db.find('tasks', {
+        filters: [{ field: 'created_by', operator: 'eq', value: emailFilter }],
+        limit: 2000
+      });
+      
+      const taskMap = new Map();
+      assigned.forEach(t => taskMap.set(t.id, t));
+      created.forEach(t => taskMap.set(t.id, t));
+      tasks = Array.from(taskMap.values());
+    } else {
+      tasks = await db.find('tasks', { limit: 2000 });
+    }
+
+    const totalChaserLogs = emailFilter ? 0 : await db.count('chaser_logs');
 
     const isClosedStatus = (status) => ['done', 'cancelled'].includes(status);
     const normalizedTasks = tasks.map((task) => ({
@@ -443,7 +461,9 @@ class ChaserEngine {
       status: scalar(task.status),
       due_date: scalar(task.due_date),
       chaser_enabled: scalar(task.chaser_enabled) === true,
+      assignee_email: scalar(task.assignee_email),
     }));
+
     const chaserEnabledTasks = normalizedTasks.filter((task) => task.chaser_enabled);
     const totalTasks = chaserEnabledTasks.length;
     const doneTasks = chaserEnabledTasks.filter((task) => task.status === 'done').length;
@@ -462,32 +482,36 @@ class ChaserEngine {
     // DB-side filtering for status can overcount in that case.
     let totalAcknowledgedLogs = 0;
     let chasersSentToday = 0;
-    const pageSize = 200;
-    let offset = 0;
 
-    while (true) {
-      const logsBatch = await db.find('chaser_logs', {
-        sort: '-sent_at',
-        limit: pageSize,
-        offset,
-      });
-      if (!logsBatch.length) break;
+    // Only scan logs if not filtered by email, or we'd need to cross-reference tasks
+    if (!emailFilter) {
+      const pageSize = 200;
+      let offset = 0;
 
-      for (const log of logsBatch) {
-        if (scalar(log.status) === 'acknowledged') {
-          totalAcknowledgedLogs += 1;
+      while (true) {
+        const logsBatch = await db.find('chaser_logs', {
+          sort: '-sent_at',
+          limit: pageSize,
+          offset,
+        });
+        if (!logsBatch.length) break;
+
+        for (const log of logsBatch) {
+          if (scalar(log.status) === 'acknowledged') {
+            totalAcknowledgedLogs += 1;
+          }
+          const sentAt = scalar(log.sent_at);
+          if (sentAt && dayjs(sentAt).isAfter(now.startOf('day'))) {
+            chasersSentToday += 1;
+          }
         }
-        const sentAt = scalar(log.sent_at);
-        if (sentAt && dayjs(sentAt).isAfter(now.startOf('day'))) {
-          chasersSentToday += 1;
-        }
+
+        if (logsBatch.length < pageSize) break;
+        offset += pageSize;
       }
-
-      if (logsBatch.length < pageSize) break;
-      offset += pageSize;
     }
 
-    const acknowledgmentRate = totalChaserLogs > 0
+    const acknowledgmentRate = !emailFilter && totalChaserLogs > 0
       ? Math.round((totalAcknowledgedLogs / totalChaserLogs) * 1000) / 10
       : 0;
 
@@ -496,13 +520,61 @@ class ChaserEngine {
       doneTasks,
       overdueTasks,
       dueTodayCount,
-      chasersSentToday,
-      totalChasersSent: totalChaserLogs,
+      chasersSentToday: emailFilter ? 0 : chasersSentToday, // simplified for isolation
+      totalChasersSent: emailFilter ? 0 : totalChaserLogs,
       acknowledgmentRate,
       completionRate: totalTasks > 0 
         ? Math.round((doneTasks / totalTasks) * 100) 
         : 0,
     };
+  }
+
+  /**
+   * Get data for the weekly digest
+   */
+  async getWeeklyDigestData(userEmail = null) {
+    let tasks = [];
+    if (userEmail) {
+      const assigned = await db.find('tasks', {
+        filters: [{ field: 'assignee_email', operator: 'eq', value: userEmail }],
+        limit: 500
+      });
+      const created = await db.find('tasks', {
+        filters: [{ field: 'created_by', operator: 'eq', value: userEmail }],
+        limit: 500
+      });
+      const taskMap = new Map();
+      assigned.forEach(t => taskMap.set(t.id, t));
+      created.forEach(t => taskMap.set(t.id, t));
+      tasks = Array.from(taskMap.values());
+    } else {
+      tasks = await db.find('tasks', { limit: 500 });
+    }
+
+    const isClosedStatus = (status) => ['done', 'cancelled'].includes(String(status || '').toLowerCase());
+
+    const pendingTasks = tasks
+      .map(t => ({
+        ...t,
+        status: scalar(t.status),
+        assignee_email: scalar(t.assignee_email),
+        assignee_name: scalar(t.assignee_name),
+        due_date: scalar(t.due_date),
+      }))
+      .filter((task) => !isClosedStatus(task.status));
+
+    // Group by assignee
+    const byAssignee = {};
+    for (const task of pendingTasks) {
+      const key = task.assignee_email;
+      if (!key) continue;
+      if (!byAssignee[key]) {
+        byAssignee[key] = { email: key, name: task.assignee_name, tasks: [] };
+      }
+      byAssignee[key].tasks.push(task);
+    }
+
+    return Object.values(byAssignee);
   }
 }
 

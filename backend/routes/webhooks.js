@@ -1,6 +1,6 @@
 /**
- * Webhook Routes — /api/webhooks
- * Receives callbacks FROM Boltic workflows
+ * Webhook and Log Routes — /api
+ * Consolidates webhooks, logs, and notifications into a single router instance.
  */
 const express = require('express');
 const router = express.Router();
@@ -14,9 +14,10 @@ const missingTaskIdsSeen = new Set();
 const BOLTIC_CRON_COOLDOWN_MINUTES = parseInt(process.env.BOLTIC_CRON_COOLDOWN_MINUTES || '10', 10);
 let lastBolticCronRun = 0;
 
-// ─── POST /api/webhooks/boltic/delivery-confirm ──────────────────────────
-// Boltic calls this after successfully sending a notification
-router.post('/boltic/delivery-confirm', async (req, res) => {
+// ─── Webhook Routes ──────────────────────────────────────────────────────────
+
+// POST /api/webhooks/boltic/delivery-confirm
+router.post('/webhooks/boltic/delivery-confirm', async (req, res) => {
   try {
     const { task_id, log_id, status, channel } = req.body;
     console.log(`[Webhook] Delivery confirmation for task ${task_id}: ${status}`);
@@ -30,9 +31,8 @@ router.post('/boltic/delivery-confirm', async (req, res) => {
   }
 });
 
-// ─── POST /api/webhooks/boltic/task-updated ──────────────────────────────
-// Boltic fires this when it detects a task status change via its own monitoring
-router.post('/boltic/task-updated', async (req, res) => {
+// POST /api/webhooks/boltic/task-updated
+router.post('/webhooks/boltic/task-updated', async (req, res) => {
   try {
     const { task_id, new_status, updated_by } = req.body;
     console.log(`[Webhook] Task ${task_id} updated to ${new_status}`);
@@ -68,10 +68,9 @@ router.post('/boltic/task-updated', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-// Note: we rely on Boltic's monitoring for task updates, but if desired we could also add a generic /task-updated webhook that Boltic workflows can call from any step to trigger an immediate scan (e.g. after a manual chase or snooze action).
-// ─── POST /api/webhooks/boltic/cron-trigger ──────────────────────────────
-// Boltic's scheduled workflow pings this to run the chaser scan
-router.post('/boltic/cron-trigger', async (req, res) => {
+
+// POST /api/webhooks/boltic/cron-trigger
+router.post('/webhooks/boltic/cron-trigger', async (req, res) => {
   try {
     console.log('[Webhook] Boltic cron trigger received');
     const now = Date.now();
@@ -96,8 +95,8 @@ router.post('/boltic/cron-trigger', async (req, res) => {
   }
 });
 
-// ─── POST /api/webhooks/manual-chase ─────────────────────────────
-router.post('/manual-chase', async (req, res) => {
+// POST /api/webhooks/manual-chase
+router.post('/webhooks/manual-chase', async (req, res) => {
   try {
     const { task_id } = req.body;
     await chaserEngine.manualChase(task_id, 'webhook_manual');
@@ -107,9 +106,8 @@ router.post('/manual-chase', async (req, res) => {
   }
 });
 
-// ─── GET /api/webhooks/snooze ──────────────────────────────────────────────
-// Handles snooze links clicked from emails
-router.get('/snooze', async (req, res) => {
+// GET /api/webhooks/snooze
+router.get('/webhooks/snooze', async (req, res) => {
   try {
     const { task_id, hours = 4 } = req.query;
     await chaserEngine.snoozeTask(task_id, parseInt(hours));
@@ -122,9 +120,8 @@ router.get('/snooze', async (req, res) => {
   }
 });
 
-// ─── GET /api/webhooks/acknowledge ─────────────────────────────────────────
-// Handles acknowledge links clicked from emails
-router.get('/acknowledge', async (req, res) => {
+// GET /api/webhooks/acknowledge
+router.get('/webhooks/acknowledge', async (req, res) => {
   try {
     const { task_id, token, user_email = 'email_link' } = req.query;
     if (!task_id) {
@@ -152,14 +149,12 @@ router.get('/acknowledge', async (req, res) => {
   }
 });
 
-module.exports = router;
+// ─── Chaser Log Routes ───────────────────────────────────────────────────────
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Chaser Logs Routes — /api/chaser-logs
-// ═══════════════════════════════════════════════════════════════════════════
-const logsRouter = express.Router();
+const { authMiddleware } = require('../services/authMiddleware');
 
-logsRouter.get('/', async (req, res) => {
+// GET /api/chaser-logs
+router.get('/chaser-logs', authMiddleware, async (req, res) => {
   try {
     const { task_id, type, status, limit = 100 } = req.query;
     const requestedLimit = Number.parseInt(limit, 10) || 100;
@@ -185,8 +180,6 @@ logsRouter.get('/', async (req, res) => {
 
     let logs = [];
     if (type || status) {
-      // Type/status are dropdown fields in Boltic and may be returned as arrays.
-      // Fetch pages, normalize to scalars, then filter deterministically.
       const pageSize = 200;
       let offset = 0;
       let keepFetching = true;
@@ -218,11 +211,9 @@ logsRouter.get('/', async (req, res) => {
 
     logs = logs.slice(0, requestedLimit);
 
-    // Enrich each log with task data without N+1 lookups.
     const uniqueTaskIds = [...new Set(logs.map((log) => String(log.task_id || '')).filter(Boolean))];
     const tasksById = new Map();
 
-    // Keep chunks modest so "id IN (...)" doesn't become too large.
     const chunkSize = 50;
     for (let i = 0; i < uniqueTaskIds.length; i += chunkSize) {
       const chunk = uniqueTaskIds.slice(i, i + chunkSize);
@@ -240,7 +231,7 @@ logsRouter.get('/', async (req, res) => {
       }
     }
 
-    const enrichedLogs = logs.map((log) => {
+    let enrichedLogs = logs.map((log) => {
       const taskId = String(log.task_id || '');
       const task = tasksById.get(taskId);
       if (!task && taskId && !missingTaskIdsSeen.has(taskId)) {
@@ -257,24 +248,31 @@ logsRouter.get('/', async (req, res) => {
       };
     });
 
+    // Data Isolation: regular users only see logs for tasks they are assigned to
+    if (req.user.role === 'user') {
+      enrichedLogs = enrichedLogs.filter(log => 
+        String(log.recipient_email || '').trim().toLowerCase() === req.user.email.toLowerCase()
+      );
+    }
+
     res.json({ success: true, data: enrichedLogs, count: enrichedLogs.length });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-module.exports.logsRouter = logsRouter;
+// ─── Notification Routes ─────────────────────────────────────────────────────
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Notifications Routes — /api/notifications
-// ═══════════════════════════════════════════════════════════════════════════
-const notifRouter = express.Router();
-
-notifRouter.get('/', async (req, res) => {
+// GET /api/notifications
+router.get('/notifications', authMiddleware, async (req, res) => {
   try {
-    const { user_email, unread } = req.query;
+    const { unread } = req.query;
     const filters = [];
-    if (user_email) filters.push({ field: 'user_email', operator: 'eq', value: user_email });
+    
+    // Data Isolation: users only see their own notifications
+    const userEmail = req.user.email;
+    filters.push({ field: 'user_email', operator: 'eq', value: userEmail });
+    
     if (unread === 'true') filters.push({ field: 'read', operator: 'eq', value: false });
 
     const notifs = await db.find('notifications', {
@@ -288,8 +286,18 @@ notifRouter.get('/', async (req, res) => {
   }
 });
 
-notifRouter.patch('/:id/read', async (req, res) => {
+// PATCH /api/notifications/:id/read
+router.patch('/notifications/:id/read', authMiddleware, async (req, res) => {
   try {
+    const notification = await db.findById('notifications', req.params.id);
+    if (!notification) return res.status(404).json({ success: false, error: 'Notification not found' });
+
+    // Data Isolation
+    const notifEmail = scalar(notification.user_email);
+    if (String(notifEmail || '').trim().toLowerCase() !== req.user.email.toLowerCase()) {
+      return res.status(403).json({ success: false, error: 'Forbidden: Access restricted' });
+    }
+
     await db.update('notifications', req.params.id, { read: true });
     res.json({ success: true });
   } catch (err) {
@@ -297,4 +305,4 @@ notifRouter.patch('/:id/read', async (req, res) => {
   }
 });
 
-module.exports.notifRouter = notifRouter;
+module.exports = router;

@@ -7,11 +7,11 @@ import relativeTime from 'dayjs/plugin/relativeTime';
 dayjs.extend(relativeTime);
 
 const COLUMNS = [
-  { key: 'todo',        label: 'To Do',      color: 'var(--status-todo)' },
+  { key: 'todo', label: 'To Do', color: 'var(--status-todo)' },
   { key: 'in_progress', label: 'In Progress', color: 'var(--status-in_progress)' },
-  { key: 'blocked',     label: 'Blocked',     color: 'var(--status-blocked)' },
-  { key: 'in_review',   label: 'In Review',   color: 'var(--status-in_review)' },
-  { key: 'done',        label: 'Done',        color: 'var(--status-done)' },
+  { key: 'blocked', label: 'Blocked', color: 'var(--status-blocked)' },
+  { key: 'in_review', label: 'In Review', color: 'var(--status-in_review)' },
+  { key: 'done', label: 'Done', color: 'var(--status-done)' },
 ];
 
 const PRIORITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
@@ -47,7 +47,7 @@ export default function TaskBoard() {
     refetchInterval: 30000,
   });
 
-  const { data: usersData  } = useQuery({ queryKey: ['users'],    queryFn: () => userApi.list() });
+  const { data: usersData } = useQuery({ queryKey: ['users'], queryFn: () => userApi.list() });
 
   const bulkChase = useMutation({
     mutationFn: () => taskApi.bulkChase(bulkSelected, 'bulk_trigger'),
@@ -103,7 +103,7 @@ export default function TaskBoard() {
           <select value={filterPriority} onChange={e => setFilterPriority(e.target.value)}
             style={{ width: 'auto', padding: '7px 12px', fontSize: '13px' }}>
             <option value="">All Priorities</option>
-            {['critical','high','medium','low'].map(p => <option key={p} value={p}>{p}</option>)}
+            {['critical', 'high', 'medium', 'low'].map(p => <option key={p} value={p}>{p}</option>)}
           </select>
           <button className="btn btn-primary" onClick={() => setShowCreate(true)}>+ New Task</button>
         </div>
@@ -225,6 +225,19 @@ function TaskCard({ task, onClick, isSelected, onToggleBulk }) {
     onError: (e) => toast.error(String(e)),
   });
 
+  const deleteTask = useMutation({
+    mutationFn: (e) => {
+      e.stopPropagation();
+      if (!window.confirm('Are you sure you want to delete this task? This action cannot be undone.')) return;
+      return taskApi.delete(task.id);
+    },
+    onSuccess: () => {
+      toast.success('Task deleted');
+      qc.invalidateQueries(['tasks']);
+    },
+    onError: (e) => toast.error(String(e)),
+  });
+
   const avatarLetters = (task.assignee_name || 'U').split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase();
   const accentBorder = isOverdue
     ? 'rgba(251,191,36,0.6)'
@@ -263,13 +276,23 @@ function TaskCard({ task, onClick, isSelected, onToggleBulk }) {
       )}
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' }}>
-        <input
-          type="checkbox"
-          checked={isSelected}
-          onClick={(e) => { e.stopPropagation(); onToggleBulk(); }}
-          style={{ width: 14, height: 14, cursor: 'pointer', flexShrink: 0 }}
-        />
-        <span className={`badge badge-${task.priority}`}>{task.priority}</span>
+        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <input
+            type="checkbox"
+            checked={isSelected}
+            onClick={(e) => { e.stopPropagation(); onToggleBulk(); }}
+            style={{ width: 14, height: 14, cursor: 'pointer', flexShrink: 0 }}
+          />
+          <span className={`badge badge-${task.priority}`}>{task.priority}</span>
+        </div>
+        <button
+          className="btn btn-ghost btn-sm"
+          onClick={deleteTask.mutate}
+          style={{ padding: '2px 6px', color: 'var(--accent-red)', minHeight: 'auto' }}
+          title="Delete Task"
+        >
+          🗑
+        </button>
       </div>
 
       <div style={{ fontSize: '15px', fontWeight: 700, marginBottom: '8px', lineHeight: 1.4, color: 'var(--text-primary)' }}>
@@ -333,23 +356,36 @@ function TaskCard({ task, onClick, isSelected, onToggleBulk }) {
 
 function CreateTaskModal({ users, onClose, onCreated }) {
   const [form, setForm] = useState({
-    title: '', description: '', assignee_email: '',
+    title: '', description: '', assignee_email: '', assignee_name: '',
     due_date: '', priority: 'medium', status: 'todo',
     chaser_enabled: true,
   });
 
   const set = (k, v) => setForm(prev => ({ ...prev, [k]: v }));
-  const user = users.find(u => u.email === (form.assignee_email || '').toLowerCase());
+
+  const handleEmailChange = (email) => {
+    const lowerEmail = email.toLowerCase();
+    const matchedUser = users.find(u => u.email === lowerEmail);
+    setForm(prev => ({
+      ...prev,
+      assignee_email: lowerEmail,
+      assignee_name: matchedUser ? matchedUser.name : prev.assignee_name,
+    }));
+  };
+
+  const matchedUser = users.find(u => u.email === (form.assignee_email || '').toLowerCase());
 
   const create = useMutation({
     mutationFn: () => taskApi.create({
       ...form,
-      assignee_id: user?.id || '',
-      assignee_name: user?.name || '',
+      assignee_id: matchedUser?.id || form.assignee_email,
+      assignee_name: matchedUser?.name || form.assignee_name,
     }),
     onSuccess: () => { toast.success('Task created!'); onCreated(); },
     onError: (e) => toast.error(String(e)),
   });
+
+  const canSubmit = form.title && form.due_date && form.assignee_email && (matchedUser || form.assignee_name);
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -368,11 +404,21 @@ function CreateTaskModal({ users, onClose, onCreated }) {
 
         <div className="form-row">
           <div className="form-group">
-            <label>Assignee *</label>
-            <select value={form.assignee_email} onChange={e => set('assignee_email', e.target.value.toLowerCase())}>
-              <option value="">Select person</option>
-              {users.map(u => <option key={u.id} value={u.email}>{u.name}</option>)}
-            </select>
+            <label>Assignee Email *</label>
+            <input
+              placeholder="e.g. name@example.com"
+              value={form.assignee_email}
+              onChange={e => handleEmailChange(e.target.value)}
+            />
+          </div>
+          <div className="form-group">
+            <label>Assignee Name {!matchedUser && '*'}</label>
+            <input
+              placeholder="Display name"
+              value={form.assignee_name}
+              onChange={e => set('assignee_name', e.target.value)}
+              disabled={!!matchedUser}
+            />
           </div>
         </div>
 
@@ -384,7 +430,7 @@ function CreateTaskModal({ users, onClose, onCreated }) {
           <div className="form-group">
             <label>Priority</label>
             <select value={form.priority} onChange={e => set('priority', e.target.value)}>
-              {['critical','high','medium','low'].map(p => <option key={p} value={p}>{p}</option>)}
+              {['critical', 'high', 'medium', 'low'].map(p => <option key={p} value={p}>{p}</option>)}
             </select>
           </div>
         </div>
@@ -399,7 +445,7 @@ function CreateTaskModal({ users, onClose, onCreated }) {
 
         <div className="modal-footer">
           <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={() => create.mutate()} disabled={create.isPending || !form.title || !form.due_date || !form.assignee_email}>
+          <button className="btn btn-primary" onClick={() => create.mutate()} disabled={create.isPending || !canSubmit}>
             {create.isPending ? 'Creating...' : 'Create Task'}
           </button>
         </div>
@@ -421,6 +467,19 @@ function TaskDetailModal({ task, onClose, onUpdated }) {
   const chase = useMutation({
     mutationFn: () => taskApi.chase(task.id, 'task_detail'),
     onSuccess: () => { toast.success('Chase sent!'); qc.invalidateQueries(['tasks']); },
+    onError: (e) => toast.error(String(e)),
+  });
+
+  const deleteTask = useMutation({
+    mutationFn: () => {
+      if (!window.confirm('Delete this task?')) return;
+      return taskApi.delete(task.id);
+    },
+    onSuccess: () => {
+      toast.success('Task deleted');
+      qc.invalidateQueries(['tasks']);
+      onUpdated(); // This will close the modal
+    },
     onError: (e) => toast.error(String(e)),
   });
 
@@ -478,6 +537,14 @@ function TaskDetailModal({ task, onClose, onUpdated }) {
 
         <div className="modal-footer" style={{ marginTop: 8 }}>
           <button className="btn btn-ghost" onClick={onClose}>Close</button>
+          <button
+            className="btn btn-ghost"
+            style={{ color: 'var(--accent-red)', marginRight: 'auto' }}
+            onClick={() => deleteTask.mutate()}
+            disabled={deleteTask.isPending}
+          >
+            {deleteTask.isPending ? 'Deleting...' : 'Delete Task'}
+          </button>
           {task.status !== 'done' && (
             <button className="btn btn-chase" onClick={() => chase.mutate()} disabled={chase.isPending}>
               {chase.isPending ? 'Sending...' : '⚡ Send Chase'}

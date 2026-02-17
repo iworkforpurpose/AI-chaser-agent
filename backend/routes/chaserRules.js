@@ -4,6 +4,9 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db/bolticClient');
+const { authMiddleware, authorize } = require('../services/authMiddleware');
+
+router.use(authMiddleware);
 
 router.get('/', async (req, res) => {
   try {
@@ -14,7 +17,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-router.post('/', async (req, res) => {
+router.post('/', authorize(['manager', 'admin']), async (req, res) => {
   try {
     const rule = await db.insert('chaser_rules', req.body);
     res.status(201).json({ success: true, data: rule });
@@ -23,7 +26,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-router.patch('/:id', async (req, res) => {
+router.patch('/:id', authorize(['manager', 'admin']), async (req, res) => {
   try {
     const rule = await db.update('chaser_rules', req.params.id, req.body);
     res.json({ success: true, data: rule });
@@ -32,7 +35,7 @@ router.patch('/:id', async (req, res) => {
   }
 });
 
-router.delete('/:id', async (req, res) => {
+router.delete('/:id', authorize(['manager', 'admin']), async (req, res) => {
   try {
     await db.delete('chaser_rules', req.params.id);
     res.json({ success: true });
