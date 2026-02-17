@@ -82,6 +82,7 @@ const LandingPage = () => {
         position: 'relative', zIndex: 1,
         color: '#fff', fontFamily: "'Inter', system-ui, sans-serif",
         cursor: 'none',
+        scrollBehavior: 'smooth',
       }}>
 
         {/* ── Fixed Header ─────────────────────────────── */}
