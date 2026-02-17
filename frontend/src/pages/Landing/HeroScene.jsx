@@ -205,14 +205,27 @@ function Scene({ scrollProgress }) {
 /* ── Main Export: Fixed 3D background ─────────────────────────── */
 export default function HeroScene() {
   const scrollRef = useRef(0);
+  const targetRef = useRef(0);
 
   useEffect(() => {
     const onScroll = () => {
       const docHeight = document.documentElement.scrollHeight - window.innerHeight;
-      scrollRef.current = docHeight > 0 ? window.scrollY / docHeight : 0;
+      targetRef.current = docHeight > 0 ? window.scrollY / docHeight : 0;
     };
     window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
+
+    // Smooth lerp loop — 3D objects glide to the target scroll position
+    let raf;
+    const smoothScroll = () => {
+      scrollRef.current += (targetRef.current - scrollRef.current) * 0.03;
+      raf = requestAnimationFrame(smoothScroll);
+    };
+    smoothScroll();
+
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      cancelAnimationFrame(raf);
+    };
   }, []);
 
   return (
