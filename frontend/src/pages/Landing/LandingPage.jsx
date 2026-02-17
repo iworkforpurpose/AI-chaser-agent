@@ -171,8 +171,12 @@ const LandingPage = () => {
               Deploy Agent
             </button>
             <button onClick={() => {
-              const el = document.getElementById('features-section');
-              if (el) el.scrollIntoView({ behavior: 'smooth' });
+              // ScrollControls uses a div with overflow-y:auto inside the canvas
+              const scrollContainer = document.querySelector('div[style*="overflow"]')
+                || document.querySelector('canvas')?.parentElement?.querySelector('div[style]');
+              if (scrollContainer && scrollContainer.scrollHeight > scrollContainer.clientHeight) {
+                scrollContainer.scrollTo({ top: scrollContainer.scrollHeight * 0.25, behavior: 'smooth' });
+              }
             }} style={{
               background: 'rgba(255,255,255,0.08)', color: '#fff',
               border: '1px solid rgba(255,255,255,0.15)', padding: '18px 40px', borderRadius: '16px',
