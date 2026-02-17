@@ -1,25 +1,44 @@
-import React, { useRef, useMemo } from 'react';
+import React, { useRef, useMemo, useState, useEffect } from 'react';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import {
   Float,
   Environment,
   PerspectiveCamera,
-  ScrollControls,
-  Scroll,
-  useScroll,
-  Text,
   MeshWobbleMaterial,
 } from '@react-three/drei';
-import * as THREE from 'three';
+
+/* ── Shared scroll progress (0→1) ─────────────────────────────── */
+const ScrollContext = React.createContext({ progress: 0 });
+
+export const useScrollProgress = () => React.useContext(ScrollContext);
+
+export function ScrollProgressProvider({ children }) {
+  const [progress, setProgress] = useState(0);
+
+  useEffect(() => {
+    const onScroll = () => {
+      const scrollY = window.scrollY;
+      const docHeight = document.documentElement.scrollHeight - window.innerHeight;
+      setProgress(docHeight > 0 ? scrollY / docHeight : 0);
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
+  return (
+    <ScrollContext.Provider value={{ progress }}>
+      {children}
+    </ScrollContext.Provider>
+  );
+}
 
 /* ── Sharp Hexagonal Prism ────────────────────────────────────── */
-const FloatingHex = ({ position, color, scale = 1, speed = 1 }) => {
+const FloatingHex = ({ position, color, scale = 1, speed = 1, scrollProgress }) => {
   const ref = useRef();
-  const scroll = useScroll();
 
   useFrame((state) => {
     const t = state.clock.getElapsedTime();
-    const s = scroll.offset; // 0 → 1
+    const s = scrollProgress.current;
 
     ref.current.rotation.x = t * 0.3 * speed + s * Math.PI * 2;
     ref.current.rotation.y = t * 0.2 * speed + s * Math.PI;
@@ -43,13 +62,12 @@ const FloatingHex = ({ position, color, scale = 1, speed = 1 }) => {
 };
 
 /* ── Wobbling Torus ───────────────────────────────────────────── */
-const WobblingRing = ({ position, color, speed = 1 }) => {
+const WobblingRing = ({ position, color, speed = 1, scrollProgress }) => {
   const ref = useRef();
-  const scroll = useScroll();
 
   useFrame((state) => {
     const t = state.clock.getElapsedTime();
-    const s = scroll.offset;
+    const s = scrollProgress.current;
 
     ref.current.rotation.x = t * 0.15 * speed + s * Math.PI * 3;
     ref.current.rotation.z = t * 0.1 * speed;
@@ -72,13 +90,12 @@ const WobblingRing = ({ position, color, speed = 1 }) => {
 };
 
 /* ── Octahedron ───────────────────────────────────────────────── */
-const FloatingOcta = ({ position, color, scale = 0.8 }) => {
+const FloatingOcta = ({ position, color, scale = 0.8, scrollProgress }) => {
   const ref = useRef();
-  const scroll = useScroll();
 
   useFrame((state) => {
     const t = state.clock.getElapsedTime();
-    const s = scroll.offset;
+    const s = scrollProgress.current;
 
     ref.current.rotation.y = t * 0.4 + s * Math.PI * 4;
     ref.current.rotation.z = t * 0.2;
@@ -101,9 +118,8 @@ const FloatingOcta = ({ position, color, scale = 0.8 }) => {
 };
 
 /* ── Particle Field ───────────────────────────────────────────── */
-const StarField = ({ count = 200 }) => {
+const StarField = ({ count = 200, scrollProgress }) => {
   const ref = useRef();
-  const scroll = useScroll();
 
   const positions = useMemo(() => {
     const arr = new Float32Array(count * 3);
@@ -115,8 +131,8 @@ const StarField = ({ count = 200 }) => {
     return arr;
   }, [count]);
 
-  useFrame((state) => {
-    const s = scroll.offset;
+  useFrame(() => {
+    const s = scrollProgress.current;
     ref.current.rotation.y = s * Math.PI * 0.5;
     ref.current.position.y = -s * 12;
   });
@@ -131,16 +147,14 @@ const StarField = ({ count = 200 }) => {
   );
 };
 
-/* ── Camera Rig (moves with scroll) ──────────────────────────── */
-const CameraRig = () => {
-  const scroll = useScroll();
+/* ── Camera Rig ──────────────────────────────────────────────── */
+const CameraRig = ({ scrollProgress }) => {
   const { camera } = useThree();
 
   useFrame((state) => {
-    const s = scroll.offset;
+    const s = scrollProgress.current;
     const t = state.clock.getElapsedTime();
 
-    // Camera drifts down and forward as user scrolls
     camera.position.y = 0 - s * 6;
     camera.position.z = 8 - s * 3;
     camera.position.x = Math.sin(t * 0.1) * 0.3;
@@ -150,8 +164,8 @@ const CameraRig = () => {
   return null;
 };
 
-/* ── Scene Content (inside ScrollControls) ────────────────────── */
-function SceneContent({ children }) {
+/* ── Scene (reads scroll from ref) ────────────────────────────── */
+function Scene({ scrollProgress }) {
   return (
     <>
       <ambientLight intensity={0.4} />
@@ -159,52 +173,53 @@ function SceneContent({ children }) {
       <pointLight position={[-10, -5, 5]} intensity={0.6} color="#f59e0b" />
       <spotLight position={[0, 15, 0]} intensity={0.8} angle={0.5} penumbra={1} color="#ffffff" />
 
-      <CameraRig />
-      <StarField count={300} />
+      <CameraRig scrollProgress={scrollProgress} />
+      <StarField count={300} scrollProgress={scrollProgress} />
 
-      {/* Section 1: Hero — centered gems */}
       <Float speed={1.5} rotationIntensity={0.5} floatIntensity={1.5}>
-        <FloatingHex position={[0, 0, 0]} color="#3b82f6" scale={1.4} speed={0.6} />
+        <FloatingHex position={[0, 0, 0]} color="#3b82f6" scale={1.4} speed={0.6} scrollProgress={scrollProgress} />
       </Float>
       <Float speed={2} rotationIntensity={0.8} floatIntensity={1}>
-        <FloatingHex position={[-3.5, 0.5, -2]} color="#0ea5e9" scale={0.7} speed={1} />
+        <FloatingHex position={[-3.5, 0.5, -2]} color="#0ea5e9" scale={0.7} speed={1} scrollProgress={scrollProgress} />
       </Float>
       <Float speed={1.8} rotationIntensity={0.6} floatIntensity={1.2}>
-        <FloatingHex position={[3.5, -0.5, -3]} color="#8b5cf6" scale={0.6} speed={0.9} />
+        <FloatingHex position={[3.5, -0.5, -3]} color="#8b5cf6" scale={0.6} speed={0.9} scrollProgress={scrollProgress} />
       </Float>
 
-      {/* Section 2: Rules — rings float into view */}
-      <WobblingRing position={[-4, -7, -1]} color="#f59e0b" speed={0.7} />
-      <WobblingRing position={[4, -8, -2]} color="#ef4444" speed={0.5} />
+      <WobblingRing position={[-4, -7, -1]} color="#f59e0b" speed={0.7} scrollProgress={scrollProgress} />
+      <WobblingRing position={[4, -8, -2]} color="#ef4444" speed={0.5} scrollProgress={scrollProgress} />
 
-      {/* Section 3: CTA — big octahedron */}
-      <FloatingOcta position={[0, -14, -1]} color="#22c55e" scale={1.2} />
+      <FloatingOcta position={[0, -14, -1]} color="#22c55e" scale={1.2} scrollProgress={scrollProgress} />
       <Float speed={1} rotationIntensity={1} floatIntensity={2}>
-        <FloatingHex position={[-3, -15, -3]} color="#f59e0b" scale={0.5} speed={1.2} />
+        <FloatingHex position={[-3, -15, -3]} color="#f59e0b" scale={0.5} speed={1.2} scrollProgress={scrollProgress} />
       </Float>
       <Float speed={1.5} rotationIntensity={0.5} floatIntensity={1}>
-        <FloatingHex position={[3, -13, -2]} color="#3b82f6" scale={0.4} speed={0.8} />
+        <FloatingHex position={[3, -13, -2]} color="#3b82f6" scale={0.4} speed={0.8} scrollProgress={scrollProgress} />
       </Float>
 
       <Environment preset="city" />
-
-      {/* HTML Content overlaid on top of 3D */}
-      <Scroll html style={{ width: '100%' }}>
-        {children}
-      </Scroll>
     </>
   );
 }
 
-/* ── Main Export ──────────────────────────────────────────────── */
-export default function HeroScene({ children }) {
+/* ── Main Export: Fixed 3D background ─────────────────────────── */
+export default function HeroScene() {
+  const scrollRef = useRef(0);
+
+  useEffect(() => {
+    const onScroll = () => {
+      const docHeight = document.documentElement.scrollHeight - window.innerHeight;
+      scrollRef.current = docHeight > 0 ? window.scrollY / docHeight : 0;
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
   return (
-    <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', zIndex: 0 }}>
+    <div style={{ position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh', zIndex: 0, pointerEvents: 'none' }}>
       <Canvas gl={{ antialias: true, alpha: true }}>
         <PerspectiveCamera makeDefault position={[0, 0, 8]} fov={50} />
-        <ScrollControls pages={4} damping={0.25}>
-          <SceneContent>{children}</SceneContent>
-        </ScrollControls>
+        <Scene scrollProgress={scrollRef} />
       </Canvas>
     </div>
   );
